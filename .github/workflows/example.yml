@@ -1,0 +1,22 @@
+name: PR review example
+
+# Copy this file into your own repository to use the action.
+# It runs on every pull request and posts one review comment per PR,
+# updating the same comment on each push.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: taha080/ai-pr-reviewer-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: add a Groq API key (BYOK) for a short AI summary.
+          # groq-api-key: ${{ secrets.GROQ_API_KEY }}
+          fail-on: error
