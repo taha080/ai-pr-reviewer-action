@@ -1,0 +1,58 @@
+name: "AI PR Reviewer"
+description: "Reviews PR diffs for security issues, bug patterns, complexity and missing tests (static analysis + optional BYOK Groq)"
+author: "Taha Ahsan"
+
+branding:
+  icon: "search"
+  color: "blue"
+
+inputs:
+  github-token:
+    description: "GitHub token used to read the PR diff and post the review comment (usually secrets.GITHUB_TOKEN)"
+    required: true
+    default: ${{ github.token }}
+  groq-api-key:
+    description: "Optional Groq API key (BYOK) for a short AI summary. Without it the action still reviews fully on static analysis."
+    required: false
+    default: ""
+  fail-on:
+    description: "Fail the check when findings of this severity or worse exist: error, warning or none"
+    required: false
+    default: "error"
+  max-findings:
+    description: "Maximum number of findings to include in the comment"
+    required: false
+    default: "30"
+  pr-number:
+    description: "PR number to review (defaults to the PR that triggered the workflow)"
+    required: false
+    default: ""
+
+outputs:
+  findings:
+    description: "Total number of findings"
+    value: ${{ steps.review.outputs.findings }}
+  errors:
+    description: "Number of error-severity findings"
+    value: ${{ steps.review.outputs.errors }}
+  verdict:
+    description: "One-line verdict of the review"
+    value: ${{ steps.review.outputs.verdict }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Review the PR
+      id: review
+      shell: bash
+      env:
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_GROQ_API_KEY: ${{ inputs.groq-api-key }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_MAX_FINDINGS: ${{ inputs.max-findings }}
+        INPUT_PR_NUMBER: ${{ inputs.pr-number }}
+      run: python3 "${{ github.action_path }}/src/main.py"
