@@ -1,0 +1,22 @@
+name: Dogfood PR review
+
+# This repo reviews its own PRs with the action itself (uses: ./), so
+# every rule change is tested against a real PR before it ships.
+# fail-on is "none" here: the dogfood PRs deliberately contain flagged
+# code (see examples/), so the review must report, not block the merge.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on: none
