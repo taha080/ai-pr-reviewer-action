@@ -12,6 +12,7 @@ no data stored anywhere.
 | Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification |
 | Bugs | Bare `except:`, silent `except Exception:`, mutable default arguments, `TODO` / `FIXME` markers, string-built queries |
 | Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels (Python AST) |
+| JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types |
 | Tests | Source files changed with no test file touched in the PR |
 | Style | Lines over 120 characters, leftover `print()` calls |
 
@@ -99,14 +100,26 @@ PR diff (GitHub API) → src/diffparse.py → src/checks.py → src/report.py �
 
 - `src/diffparse.py` — parses unified diffs into added lines with real line numbers.
 - `src/checks.py` — the rule engine (regex rules + Python AST checks + PR-level tests check).
+- `src/checks_js.py` — the JavaScript / TypeScript rule set (JS001–JS010).
 - `src/report.py` — renders the Markdown review comment.
 - `src/main.py` — fetches the diff, runs the checks, posts/updates the comment.
+
+The repo dogfoods itself: `.github/workflows/dogfood.yml` runs the action
+from the PR's own checkout (`uses: ./`) on every pull request, and
+`examples/bad-example.js` is a fixture with deliberately flagged code so
+each rule change can be verified against a real review comment.
 
 ## Status
 
 Day 1 (6 Nov 2026): core action shipped — rule engine, report renderer,
-entry point, tests (11 passing), CI workflow and this README. Next: run it
-against a real PR in this repo to dogfood it, then add a JS/TS rule set.
+entry point, tests (11 passing), CI workflow and this README.
+
+Day 2 (7 Nov 2026): JS/TS rule set shipped (JS001–JS010, 7 new tests,
+18 passing) and the action now dogfoods itself — `.github/workflows/dogfood.yml`
+reviews this repo's own PRs with the local action, verified against real
+PR #1 using the `examples/bad-example.js` fixture (dogfooding caught and
+fixed a JS002 bug: `debugger` with a trailing comment was missed). Release
+v1 published the same day. Next: a JS/TS complexity check (long functions).
 
 ## License
 
