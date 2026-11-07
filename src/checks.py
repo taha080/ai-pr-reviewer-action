@@ -274,6 +274,9 @@ def _check_missing_tests(files: list[ChangedFile]) -> list[Finding]:
 
 def review_files(files: list[ChangedFile]) -> list[Finding]:
     """Run every rule over the changed files and return all findings."""
+    # Lazy import: checks_js needs Finding from this module.
+    from .checks_js import check_js
+
     findings: list[Finding] = []
     for changed in files:
         if changed.path.endswith((".md", ".txt", ".rst", ".json", ".yml", ".yaml", ".toml", ".lock")):
@@ -282,6 +285,7 @@ def review_files(files: list[ChangedFile]) -> list[Finding]:
         findings.extend(_apply_line_rules(changed, BUG_RULES, "bugs"))
         findings.extend(_apply_line_rules(changed, STYLE_RULES, "style"))
         findings.extend(_check_python_ast(changed))
+        findings.extend(check_js(changed))
     findings.extend(_check_missing_tests(files))
     severity_rank = {"error": 0, "warning": 1, "info": 2}
     return sorted(findings, key=lambda f: (severity_rank[f.severity], f.path, f.line))
