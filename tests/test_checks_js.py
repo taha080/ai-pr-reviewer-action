@@ -83,6 +83,19 @@ class TestJsRules(unittest.TestCase):
         self.assertNotIn("JS004", rules)
         self.assertNotIn("JS007", rules)
 
+    def test_debugger_with_trailing_comment_flagged(self):
+        # Regression: the dogfood PR showed JS002 missed "debugger; // note"
+        # because the old rule only matched a bare debugger line.
+        diff = """diff --git a/dbg.js b/dbg.js
+--- a/dbg.js
++++ b/dbg.js
+@@ -1,1 +1,2 @@
+ function run() {
++  debugger; // TODO: remove before merge
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertTrue(any(f.rule == "JS002" for f in findings))
+
     def test_js_rules_do_not_fire_on_python(self):
         py = """diff --git a/x.py b/x.py
 --- a/x.py
