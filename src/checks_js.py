@@ -42,7 +42,7 @@ JS_RULES: list[_LineRule] = [
         "Remove it before merging, or use a proper logger.",
     ),
     _LineRule(
-        _r(r"^\s*debugger\s*;?\s*$"),
+        _r(r"^\s*debugger\b"),
         "warning", "JS002",
         "debugger statement left in added code.",
         "Remove it — it pauses execution for anyone with devtools open.",
