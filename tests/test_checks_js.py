@@ -111,3 +111,124 @@ class TestJsRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _js_diff(path, body_lines):
+    """Build a diff where the whole file body is added lines."""
+    added = "\n".join(f"+{line}" for line in body_lines)
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n"
+        f"+++ b/{path}\n"
+        f"@@ -0,0 +1,{len(body_lines)} @@\n"
+        f"{added}\n"
+    )
+
+
+class TestJsComplexity(unittest.TestCase):
+    def test_long_function_flagged_js011(self):
+        body = ["function huge() {"] + [f"  const v{i} = {i};" for i in range(52)] + ["}"]
+        findings = review_files(parse_unified_diff(_js_diff("big.js", body)))
+        js011 = [f for f in findings if f.rule == "JS011"]
+        self.assertEqual(len(js011), 1)
+        self.assertIn("54 lines", js011[0].message)
+        self.assertEqual(js011[0].line, 1)
+
+    def test_short_function_is_clean(self):
+        body = ["function small() {"] + [f"  const v{i} = {i};" for i in range(8)] + ["}"]
+        findings = review_files(parse_unified_diff(_js_diff("small.js", body)))
+        self.assertNotIn("JS011", {f.rule for f in findings})
+
+    def test_arrow_function_length_flagged(self):
+        body = ["const run = () => {"] + [f"  const v{i} = {i};" for i in range(52)] + ["};"]
+        findings = review_files(parse_unified_diff(_js_diff("arrow.js", body)))
+        self.assertIn("JS011", {f.rule for f in findings})
+
+    def test_too_many_params_flagged_js012(self):
+        body = ["function many(a, b, c, d, e, f) {", "  return a;", "}"]
+        findings = review_files(parse_unified_diff(_js_diff("many.js", body)))
+        js012 = [f for f in findings if f.rule == "JS012"]
+        self.assertEqual(len(js012), 1)
+        self.assertIn("6 arguments", js012[0].message)
+
+    def test_five_params_and_destructuring_are_clean(self):
+        body = [
+            "function ok(a, b, c, d, e) {",
+            "  return a;",
+            "}",
+            "function alsoOk({x, y}, opts = {a: 1, b: 2}) {",
+            "  return opts;",
+            "}",
+        ]
+        findings = review_files(parse_unified_diff(_js_diff("ok.js", body)))
+        self.assertNotIn("JS012", {f.rule for f in findings})
+
+    def test_arrow_with_many_params_flagged(self):
+        body = ["const f = (a, b, c, d, e, f) => a;", ""]
+        findings = review_files(parse_unified_diff(_js_diff("arr.js", body)))
+        self.assertIn("JS012", {f.rule for f in findings})
+
+    def test_deep_nesting_flagged_js013(self):
+        body = [
+            "function deep(x) {",
+            "  if (x) {",
+            "    if (x) {",
+            "      if (x) {",
+            "        if (x) {",
+            "          return 1;",
+            "        }",
+            "      }",
+            "    }",
+            "  }",
+            "  return 0;",
+            "}",
+        ]
+        findings = review_files(parse_unified_diff(_js_diff("deep.js", body)))
+        js013 = [f for f in findings if f.rule == "JS013"]
+        self.assertEqual(len(js013), 1)
+        self.assertIn("4 levels", js013[0].message)
+
+    def test_three_levels_of_nesting_are_clean(self):
+        body = [
+            "function shallow(x) {",
+            "  if (x) {",
+            "    if (x) {",
+            "      if (x) {",
+            "        return 1;",
+            "      }",
+            "    }",
+            "  }",
+            "  return 0;",
+            "}",
+        ]
+        findings = review_files(parse_unified_diff(_js_diff("shallow.js", body)))
+        self.assertNotIn("JS013", {f.rule for f in findings})
+
+    def test_nested_object_literal_is_not_nesting(self):
+        body = [
+            "function config() {",
+            "  const opts = { a: 1, b: { c: 2, d: { e: 3 } } };",
+            "  return opts;",
+            "}",
+        ]
+        findings = review_files(parse_unified_diff(_js_diff("cfg.js", body)))
+        self.assertNotIn("JS013", {f.rule for f in findings})
+
+    def test_partial_fragment_skips_length_but_checks_params(self):
+        # Closing brace is not in the added lines: length/nesting unknown,
+        # but the 6-parameter signature is still flagged.
+        body = [
+            "function partial(a, b, c, d, e, f) {",
+            "  const x = 1;",
+            "  const y = 2;",
+        ]
+        findings = review_files(parse_unified_diff(_js_diff("part.js", body)))
+        rules = {f.rule for f in findings}
+        self.assertIn("JS012", rules)
+        self.assertNotIn("JS011", rules)
+        self.assertNotIn("JS013", rules)
+
+    def test_method_shorthand_measured(self):
+        body = ["class S {", "  handle() {"] + [f"    const v{i} = {i};" for i in range(52)] + ["  }", "}"]
+        findings = review_files(parse_unified_diff(_js_diff("cls.js", body)))
+        self.assertIn("JS011", {f.rule for f in findings})
