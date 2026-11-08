@@ -11,8 +11,8 @@ no data stored anywhere.
 | --- | --- |
 | Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification |
 | Bugs | Bare `except:`, silent `except Exception:`, mutable default arguments, `TODO` / `FIXME` markers, string-built queries |
-| Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels (Python AST) |
-| JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types |
+| Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels (Python AST; JS/TS via brace tracking) |
+| JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types, long functions, too many parameters, deep nesting (JS011–JS013) |
 | Tests | Source files changed with no test file touched in the PR |
 | Style | Lines over 120 characters, leftover `print()` calls |
 
@@ -100,7 +100,7 @@ PR diff (GitHub API) → src/diffparse.py → src/checks.py → src/report.py �
 
 - `src/diffparse.py` — parses unified diffs into added lines with real line numbers.
 - `src/checks.py` — the rule engine (regex rules + Python AST checks + PR-level tests check).
-- `src/checks_js.py` — the JavaScript / TypeScript rule set (JS001–JS010).
+- `src/checks_js.py` — the JavaScript / TypeScript rule set (JS001–JS013).
 - `src/report.py` — renders the Markdown review comment.
 - `src/main.py` — fetches the diff, runs the checks, posts/updates the comment.
 
@@ -119,7 +119,15 @@ Day 2 (7 Nov 2026): JS/TS rule set shipped (JS001–JS010, 7 new tests,
 reviews this repo's own PRs with the local action, verified against real
 PR #1 using the `examples/bad-example.js` fixture (dogfooding caught and
 fixed a JS002 bug: `debugger` with a trailing comment was missed). Release
-v1 published the same day. Next: a JS/TS complexity check (long functions).
+v1 published the same day.
+
+Day 3 (8 Nov 2026): JS/TS complexity rules shipped (JS011–JS013, 11 new tests,
+29 passing) — long functions, too many parameters and deep nesting, measured
+with a brace-tracking scanner that ignores strings/comments and does not count
+object literals as nesting. Dogfooded on real PR #2: the action's own review
+comment flagged JS011/JS012/JS013 on the fixture (61-line, 6-parameter,
+4-level function), and the PR was merged. Next: Dependabot triage on
+aws-eks-devops-platform, or the next rule set.
 
 ## License
 
