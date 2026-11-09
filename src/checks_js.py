@@ -13,6 +13,10 @@ literals or comments are ignored. Braces that open an object literal do not
 count towards nesting — only braces after ``)``, ``=>``, ``else``, ``do``,
 ``try`` or ``finally`` do.
 
+Dangerous-API rules (``JS014``–``JS018``) flag ``eval()``, string timers,
+the ``with`` statement, direct ``document.cookie`` access and
+comparator-less ``.sort()``.
+
 The rules run on added lines only, so pre-existing code is never nagged
 about. They are applied by :func:`src.checks.review_files`, which imports
 this module lazily to avoid a circular import (this module needs
@@ -108,6 +112,36 @@ JS_RULES: list[_LineRule] = [
         "info", "JS010",
         "Explicit `any` type defeats TypeScript's type checking.",
         "Use a precise type, unknown, or a generic instead.",
+    ),
+    _LineRule(
+        _r(r"\beval\s*\("),
+        "error", "JS014",
+        "eval() executes a string as code (code injection).",
+        "Define the function directly, or use JSON.parse for data.",
+    ),
+    _LineRule(
+        _r(r"\b(?:setTimeout|setInterval)\s*\(\s*[\"'`]"),
+        "warning", "JS015",
+        "setTimeout()/setInterval() with a string argument executes it as code.",
+        "Pass a function instead, e.g. setTimeout(() => run(), 100).",
+    ),
+    _LineRule(
+        _r(r"^\s*with\s*\("),
+        "warning", "JS016",
+        "with statement — deprecated, makes scope ambiguous and breaks optimisation.",
+        "Access the object's properties explicitly instead.",
+    ),
+    _LineRule(
+        _r(r"\bdocument\.cookie\b"),
+        "warning", "JS017",
+        "Direct document.cookie access — easy to leak or overwrite session cookies.",
+        "Use a small cookie helper that sets HttpOnly/Secure/SameSite, or an auth library.",
+    ),
+    _LineRule(
+        _r(r"\.sort\s*\(\s*\)"),
+        "info", "JS018",
+        ".sort() without a comparator sorts numbers lexicographically (10 before 2).",
+        "Pass a comparator, e.g. .sort((a, b) => a - b).",
     ),
 ]
 
