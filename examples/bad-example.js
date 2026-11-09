@@ -2,7 +2,7 @@
 //
 // This file exists so the repo can test the action against a real PR:
 // opening a PR that touches it should make the action post a review
-// comment flagging JS001-JS013 below. It is NOT production code and
+// comment flagging JS001-JS018 below. It is NOT production code and
 // must never be imported by the action itself.
 
 function greet(name) {
@@ -79,4 +79,14 @@ function tooComplex(a, b, c, d, e, f) { // JS012: 6 parameters
     }
   }
   return total;
+}
+
+// JS014-JS018: dangerous-API rules (Day 4).
+function dangerous(userInput) {
+  eval(userInput); // JS014: eval() executes a string
+  setTimeout("dangerous()", 100); // JS015: string timer
+  with (userInput) { return name; } // JS016: with statement
+  const token = document.cookie; // JS017: direct cookie access
+  const ordered = [3, 10, 2].sort(); // JS018: sort() without comparator
+  return token + ordered.length;
 }
