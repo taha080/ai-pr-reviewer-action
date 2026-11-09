@@ -12,7 +12,7 @@ no data stored anywhere.
 | Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification |
 | Bugs | Bare `except:`, silent `except Exception:`, mutable default arguments, `TODO` / `FIXME` markers, string-built queries |
 | Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels (Python AST; JS/TS via brace tracking) |
-| JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types, long functions, too many parameters, deep nesting (JS011–JS013) |
+| JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types, `eval()`, string timers, `with` statement, direct `document.cookie` access, comparator-less `.sort()`, long functions, too many parameters, deep nesting (JS011–JS018) |
 | Tests | Source files changed with no test file touched in the PR |
 | Style | Lines over 120 characters, leftover `print()` calls |
 
@@ -100,7 +100,7 @@ PR diff (GitHub API) → src/diffparse.py → src/checks.py → src/report.py �
 
 - `src/diffparse.py` — parses unified diffs into added lines with real line numbers.
 - `src/checks.py` — the rule engine (regex rules + Python AST checks + PR-level tests check).
-- `src/checks_js.py` — the JavaScript / TypeScript rule set (JS001–JS013).
+- `src/checks_js.py` — the JavaScript / TypeScript rule set (JS001–JS018).
 - `src/report.py` — renders the Markdown review comment.
 - `src/main.py` — fetches the diff, runs the checks, posts/updates the comment.
 
@@ -128,6 +128,20 @@ object literals as nesting. Dogfooded on real PR #2: the action's own review
 comment flagged JS011/JS012/JS013 on the fixture (61-line, 6-parameter,
 4-level function), and the PR was merged. Next: Dependabot triage on
 aws-eks-devops-platform, or the next rule set.
+
+Day 4 (9 Nov 2026): Dependabot triage on aws-eks-devops-platform — all 12 open
+Dependabot PRs merged after CI-green + version-only checks (tls patch bumps,
+Python deps incl. pytest 9.2.0 and sqlalchemy 2.1.8 after Dependabot rebases,
+CI-action majors incl. checkout 7 and setup-python 7). JS/TS dangerous-API
+rules shipped (JS014–JS018, 3 new tests, 32 passing): `eval()`, string timers,
+the `with` statement, direct `document.cookie` access and comparator-less
+`.sort()`. Dogfooded on real PR #3: the action's own review comment flagged
+JS014–JS018 on the fixture (plus SEC002 on `eval()`), and the PR was merged.
+Note: the "PR review example" check on that PR failed by design — the released
+v1 action flags the deliberately-bad fixture's `eval()` as an error and
+`fail-on: error` exits 1; the CI and dogfood checks that test the change were
+green, so the merge went ahead on those. Next: the next rule set (Python
+complexity/quality rules), or a v1.1 release with JS001–JS018.
 
 ## License
 
