@@ -67,6 +67,57 @@ class TestJsRules(unittest.TestCase):
         self.assertIn("JS009", rules)  # new Function()
         self.assertIn("JS010", rules)  # : any
 
+    def test_eval_with_and_string_timer_flagged(self):
+        diff = """diff --git a/danger.js b/danger.js
+--- a/danger.js
++++ b/danger.js
+@@ -1,1 +1,5 @@
+ function run(userInput) {
++  eval(userInput);
++  setTimeout("run()", 100);
++  setInterval('tick()', 1000);
++  with (userInput) { return name; }
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertIn("JS014", rules)  # eval(
+        self.assertIn("JS015", rules)  # string timer
+        self.assertIn("JS016", rules)  # with statement
+
+    def test_cookie_and_bare_sort_flagged(self):
+        diff = """diff --git a/cookies.js b/cookies.js
+--- a/cookies.js
++++ b/cookies.js
+@@ -1,1 +1,4 @@
+ function run() {
++  const token = document.cookie;
++  const ordered = [3, 10, 2].sort();
++  return token + ordered.length;
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertIn("JS017", rules)  # document.cookie
+        self.assertIn("JS018", rules)  # .sort() without comparator
+
+    def test_function_timer_and_sorted_comparator_are_clean(self):
+        clean = """diff --git a/clean2.js b/clean2.js
+--- a/clean2.js
++++ b/clean2.js
+@@ -1,1 +1,5 @@
+ function run() {
++  setTimeout(() => run(), 100);
++  const ordered = [3, 10, 2].sort((a, b) => a - b);
++  const parsed = JSON.parse("{}");
++  return ordered.length + parsed;
+"""
+        findings = review_files(parse_unified_diff(clean))
+        rules = {f.rule for f in findings}
+        self.assertNotIn("JS014", rules)
+        self.assertNotIn("JS015", rules)
+        self.assertNotIn("JS016", rules)
+        self.assertNotIn("JS017", rules)
+        self.assertNotIn("JS018", rules)
+
     def test_strict_equality_and_radix_are_clean(self):
         clean = """diff --git a/clean.js b/clean.js
 --- a/clean.js
