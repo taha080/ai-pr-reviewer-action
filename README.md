@@ -11,7 +11,7 @@ no data stored anywhere.
 | --- | --- |
 | Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification |
 | Bugs | Bare `except:`, silent `except Exception:`, mutable default arguments, `TODO` / `FIXME` markers, string-built queries |
-| Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels (Python AST; JS/TS via brace tracking) |
+| Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels, more than 5 returns, boolean flag parameters, nested or over-long comprehensions, lambdas assigned to a variable (Python AST: CPL001–CPL007; JS/TS via brace tracking) |
 | JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types, `eval()`, string timers, `with` statement, direct `document.cookie` access, comparator-less `.sort()`, long functions, too many parameters, deep nesting (JS011–JS018) |
 | Tests | Source files changed with no test file touched in the PR |
 | Style | Lines over 120 characters, leftover `print()` calls |
@@ -106,8 +106,9 @@ PR diff (GitHub API) → src/diffparse.py → src/checks.py → src/report.py �
 
 The repo dogfoods itself: `.github/workflows/dogfood.yml` runs the action
 from the PR's own checkout (`uses: ./`) on every pull request, and
-`examples/bad-example.js` is a fixture with deliberately flagged code so
-each rule change can be verified against a real review comment.
+`examples/bad-example.js` / `examples/bad-example.py` are fixtures with
+deliberately flagged code so each rule change can be verified against a real
+review comment.
 
 ## Status
 
@@ -140,8 +141,17 @@ JS014–JS018 on the fixture (plus SEC002 on `eval()`), and the PR was merged.
 Note: the "PR review example" check on that PR failed by design — the released
 v1 action flags the deliberately-bad fixture's `eval()` as an error and
 `fail-on: error` exits 1; the CI and dogfood checks that test the change were
-green, so the merge went ahead on those. Next: the next rule set (Python
-complexity/quality rules), or a v1.1 release with JS001–JS018.
+green, so the merge went ahead on those.
+
+Day 5 (10 Nov 2026): Python complexity/quality rules shipped (CPL004–CPL007,
+6 new tests, 38 passing) — more than 5 returns, boolean flag parameters,
+nested or over-long comprehensions, and lambdas assigned to a variable.
+Returns inside nested functions are not counted, and a nested comprehension
+is flagged once, on the outer one. Dogfooded on real PR #4: the action's own
+review comment flagged CPL004/CPL005/CPL006/CPL007 on the new
+`examples/bad-example.py` fixture (plus the expected TST001), and the PR was
+merged with all 3 checks green. Next: a v1.1 release with JS001–JS018 and
+CPL004–CPL007.
 
 ## License
 
