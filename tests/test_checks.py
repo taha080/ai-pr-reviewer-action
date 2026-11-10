@@ -123,6 +123,102 @@ class TestChecks(unittest.TestCase):
         self.assertEqual(findings, [])
 
 
+    def test_too_many_returns_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,14 @@
++def pick(n):
++    if n == 1:
++        return "a"
++    if n == 2:
++        return "b"
++    if n == 3:
++        return "c"
++    if n == 4:
++        return "d"
++    if n == 5:
++        return "e"
++    if n == 6:
++        return "f"
++    return "z"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CPL004"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+
+    def test_returns_inside_nested_function_not_counted(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,10 @@
++def outer(n):
++    def inner(x):
++        if x:
++            return 1
++        return 2
++    if n:
++        return inner(n)
++    return 0
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CPL004" for f in findings))
+
+    def test_boolean_flag_param_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def connect(host, verbose=True, retries=3):
++    return host
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CPL005"]
+        self.assertEqual(len(flagged), 1)  # verbose only; retries=3 is not a bool
+        self.assertEqual(flagged[0].severity, "info")
+
+    def test_nested_and_long_comprehensions_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def grid(rows):
++    return [[x * y for y in row] for row in rows]
++def flat(matrix):
++    return [v for row in matrix for cell in row for v in cell]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CPL006"]
+        self.assertEqual(len(flagged), 2)  # nested once (outer only) + 3 generators
+        self.assertTrue(all(f.severity == "warning" for f in flagged))
+
+    def test_lambda_assignment_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,1 @@
++double = lambda n: n * 2
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CPL007"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+
+    def test_clean_function_has_no_new_complexity_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def total(values):
++    return sum(v for v in values)
++square = None
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(rules & {"CPL004", "CPL005", "CPL006", "CPL007"})
+
+
 class TestReport(unittest.TestCase):
     def test_verdict_clean(self):
         self.assertIn("No issues", verdict([]))
