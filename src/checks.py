@@ -22,6 +22,8 @@ MAX_LINE_LENGTH = 120
 MAX_FUNCTION_LINES = 50
 MAX_FUNCTION_ARGS = 5
 MAX_NESTING_DEPTH = 3
+MAX_FUNCTION_RETURNS = 5
+MAX_COMPREHENSION_GENERATORS = 2
 
 
 @dataclass
@@ -181,6 +183,122 @@ def _nesting_depth(node: ast.AST, depth: int = 0) -> int:
     return deepest
 
 
+def _count_returns(node: ast.AST) -> int:
+    """Count return statements in a function, excluding nested functions."""
+    count = 0
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(child, ast.Return):
+            count += 1
+        count += _count_returns(child)
+    return count
+
+
+def _bool_default_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """Names of parameters whose default is a bool literal (True/False)."""
+    pairs: list[tuple[ast.arg, ast.expr | None]] = []
+    if node.args.defaults:
+        pairs += list(
+            zip(node.args.args[-len(node.args.defaults):], node.args.defaults)
+        )
+    pairs += [
+        (arg, default)
+        for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults)
+        if default is not None
+    ]
+    return [
+        arg.arg
+        for arg, default in pairs
+        if isinstance(default, ast.Constant) and isinstance(default.value, bool)
+    ]
+
+
+_COMPREHENSION_TYPES = (
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+
+def _check_comprehensions_and_lambdas(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Flag nested/over-long comprehensions and lambdas assigned to names.
+
+    Runs over the whole added fragment (not just inside functions), since a
+    lambda assignment or a comprehension usually lives at module level.
+    A comprehension nested inside another is flagged once, on the outer one.
+    """
+    findings: list[Finding] = []
+
+    def _walk(node: ast.AST, in_comp: bool = False) -> None:
+        if isinstance(node, _COMPREHENSION_TYPES):
+            if not in_comp:
+                nested = any(
+                    isinstance(desc, _COMPREHENSION_TYPES)
+                    for desc in ast.walk(node)
+                    if desc is not node
+                )
+                too_many = len(node.generators) > MAX_COMPREHENSION_GENERATORS
+                if nested or too_many:
+                    if nested and too_many:
+                        detail = (
+                            f"nests another comprehension and has "
+                            f"{len(node.generators)} for-clauses "
+                            f"(over {MAX_COMPREHENSION_GENERATORS})"
+                        )
+                    elif nested:
+                        detail = "nests another comprehension"
+                    else:
+                        detail = (
+                            f"has {len(node.generators)} for-clauses "
+                            f"(over {MAX_COMPREHENSION_GENERATORS})"
+                        )
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "CPL006",
+                            f"Comprehension {detail}.",
+                            "Rewrite it as a plain loop — it will read far better.",
+                        )
+                    )
+            for child in ast.iter_child_nodes(node):
+                _walk(child, True)
+            return
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            if isinstance(value, ast.Lambda):
+                targets = (
+                    node.targets
+                    if isinstance(node, ast.Assign)
+                    else [node.target]
+                )
+                name = (
+                    targets[0].id
+                    if targets and isinstance(targets[0], ast.Name)
+                    else "?"
+                )
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "info",
+                        "CPL007",
+                        f"Lambda assigned to '{name}' instead of a named function.",
+                        "Use a def statement — it gets a proper name and docstring.",
+                    )
+                )
+        for child in ast.iter_child_nodes(node):
+            _walk(child, in_comp)
+
+    _walk(tree)
+    return findings
+
+
 def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     """Run AST checks on the added lines of a Python file.
 
@@ -242,6 +360,20 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
                             "Use None as the default and create the container inside the function.")
                 )
                 break
+        returns = _count_returns(node)
+        if returns > MAX_FUNCTION_RETURNS:
+            findings.append(
+                Finding(changed.path, start, "warning", "CPL004",
+                        f"Function '{node.name}' has {returns} return statements (over {MAX_FUNCTION_RETURNS}).",
+                        "Return early with guard clauses, or split the branches into helpers.")
+            )
+        for param in _bool_default_params(node):
+            findings.append(
+                Finding(changed.path, start, "info", "CPL005",
+                        f"Boolean flag parameter '{param}' in '{node.name}' changes its behaviour from the call site.",
+                        "Split it into two functions, or pass an enum / strategy object instead.")
+            )
+    findings.extend(_check_comprehensions_and_lambdas(tree, changed, _real))
     return findings
 
 
