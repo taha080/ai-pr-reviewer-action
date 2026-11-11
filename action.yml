@@ -23,6 +23,10 @@ inputs:
     description: "Maximum number of findings to include in the comment"
     required: false
     default: "30"
+  ignore-rules:
+    description: "Comma-separated rule ids to skip, e.g. 'STY002, BUG003' (case-insensitive)"
+    required: false
+    default: ""
   pr-number:
     description: "PR number to review (defaults to the PR that triggered the workflow)"
     required: false
@@ -54,5 +58,6 @@ runs:
         INPUT_GROQ_API_KEY: ${{ inputs.groq-api-key }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_MAX_FINDINGS: ${{ inputs.max-findings }}
+        INPUT_IGNORE_RULES: ${{ inputs.ignore-rules }}
         INPUT_PR_NUMBER: ${{ inputs.pr-number }}
       run: python3 "${{ github.action_path }}/src/main.py"
