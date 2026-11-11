@@ -219,6 +219,53 @@ class TestChecks(unittest.TestCase):
         self.assertFalse(rules & {"CPL004", "CPL005", "CPL006", "CPL007"})
 
 
+class TestIgnoreRules(unittest.TestCase):
+    IGNORE_DIFF = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++print("hello")
++eval(user_input)
++# TODO: handle this properly
+"""
+
+    def test_ignored_rule_is_dropped_but_others_kept(self):
+        findings = review_files(
+            parse_unified_diff(self.IGNORE_DIFF), {"STY002"}
+        )
+        rules = {f.rule for f in findings}
+        self.assertNotIn("STY002", rules)
+        self.assertIn("SEC002", rules)  # eval() still flagged
+        self.assertIn("BUG003", rules)  # TODO still flagged
+
+    def test_ignore_is_case_insensitive(self):
+        findings = review_files(
+            parse_unified_diff(self.IGNORE_DIFF), {"sec002", " sty002 "}
+        )
+        rules = {f.rule for f in findings}
+        self.assertNotIn("SEC002", rules)
+        self.assertNotIn("STY002", rules)
+        self.assertIn("BUG003", rules)
+
+    def test_pr_level_rule_can_be_ignored(self):
+        findings = review_files(
+            parse_unified_diff(MISSING_TESTS_DIFF), {"TST001"}
+        )
+        self.assertEqual(findings, [])
+
+    def test_unknown_rule_id_is_ignored_harmlessly(self):
+        findings = review_files(
+            parse_unified_diff(self.IGNORE_DIFF), {"NOPE999"}
+        )
+        rules = {f.rule for f in findings}
+        self.assertIn("SEC002", rules)
+        self.assertIn("STY002", rules)
+
+    def test_no_ignore_argument_behaves_as_before(self):
+        findings = review_files(parse_unified_diff(SAMPLE_DIFF))
+        self.assertTrue(any(f.rule == "SEC001" for f in findings))
+
+
 class TestReport(unittest.TestCase):
     def test_verdict_clean(self):
         self.assertIn("No issues", verdict([]))
