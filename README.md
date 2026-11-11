@@ -46,6 +46,16 @@ PR thread stays clean. `fail-on: error` (the default) fails the check when a
 blocking finding exists; use `warning` to also fail on warnings, or `none`
 to report without failing.
 
+To silence rules you have deliberately decided not to enforce, pass their
+ids to `ignore-rules` (comma-separated, case-insensitive):
+
+```yaml
+      - uses: taha080/ai-pr-reviewer-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          ignore-rules: STY002, BUG003   # allow print() and TODO markers
+```
+
 ### Optional AI summary (BYOK Groq)
 
 Add a `GROQ_API_KEY` repository secret and pass it in:
@@ -68,6 +78,7 @@ Without it the action still reviews fully on static analysis alone.
 | `groq-api-key` | no | `""` | Optional Groq key for the AI summary |
 | `fail-on` | no | `error` | `error`, `warning` or `none` |
 | `max-findings` | no | `30` | Max findings included in the comment |
+| `ignore-rules` | no | `""` | Comma-separated rule ids to skip, e.g. `STY002, BUG003` |
 | `pr-number` | no | `""` | PR to review (defaults to the triggering PR) |
 
 ## Outputs
@@ -152,6 +163,16 @@ review comment flagged CPL004/CPL005/CPL006/CPL007 on the new
 `examples/bad-example.py` fixture (plus the expected TST001), and the PR was
 merged with all 3 checks green. Next: a v1.1 release with JS001–JS018 and
 CPL004–CPL007.
+
+Day 6 (11 Nov 2026): `ignore-rules` input shipped (5 new tests, 43 passing)
+— pass comma-separated rule ids (case-insensitive) to silence rules a repo
+has deliberately decided not to enforce, e.g. `ignore-rules: STY002`. It is
+wired through `review_files()`, `main.py` and `action.yml`, and applies to
+every rule category including the PR-level TST001 check. Dogfooded on real
+PR #5: the dogfood workflow passes `ignore-rules: STY002`, and the action's
+own review comment flagged BUG003 on the new `examples/ignore-example.py`
+fixture but NOT STY002, exactly as intended; the PR was merged. Next: the
+v1.1 release with JS001–JS018, CPL004–CPL007 and ignore-rules.
 
 ## License
 
