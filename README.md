@@ -171,8 +171,7 @@ wired through `review_files()`, `main.py` and `action.yml`, and applies to
 every rule category including the PR-level TST001 check. Dogfooded on real
 PR #5: the dogfood workflow passes `ignore-rules: STY002`, and the action's
 own review comment flagged BUG003 on the new `examples/ignore-example.py`
-fixture but NOT STY002, exactly as intended; the PR was merged. Next: the
-v1.1 release with JS001–JS018, CPL004–CPL007 and ignore-rules.
+fixture but NOT STY002, exactly as intended; the PR was merged. Release v1.1 published the same day.
 
 ## License
 
