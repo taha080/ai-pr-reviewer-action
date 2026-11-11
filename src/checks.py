@@ -404,11 +404,18 @@ def _check_missing_tests(files: list[ChangedFile]) -> list[Finding]:
     ]
 
 
-def review_files(files: list[ChangedFile]) -> list[Finding]:
-    """Run every rule over the changed files and return all findings."""
+def review_files(files: list[ChangedFile], ignore_rules: set[str] | None = None) -> list[Finding]:
+    """Run every rule over the changed files and return all findings.
+
+    ``ignore_rules`` is an optional set of rule ids (case-insensitive)
+    to skip — for rules a repo has deliberately decided not to enforce,
+    e.g. ``{"STY002"}`` to allow ``print()`` calls. Unknown ids are
+    ignored harmlessly.
+    """
     # Lazy import: checks_js needs Finding from this module.
     from .checks_js import check_js
 
+    ignored = {rule.strip().upper() for rule in (ignore_rules or set()) if rule.strip()}
     findings: list[Finding] = []
     for changed in files:
         if changed.path.endswith((".md", ".txt", ".rst", ".json", ".yml", ".yaml", ".toml", ".lock")):
@@ -419,5 +426,6 @@ def review_files(files: list[ChangedFile]) -> list[Finding]:
         findings.extend(_check_python_ast(changed))
         findings.extend(check_js(changed))
     findings.extend(_check_missing_tests(files))
+    findings = [f for f in findings if f.rule.upper() not in ignored]
     severity_rank = {"error": 0, "warning": 1, "info": 2}
     return sorted(findings, key=lambda f: (severity_rank[f.severity], f.path, f.line))

@@ -145,6 +145,11 @@ def main() -> int:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     groq_key = os.environ.get("INPUT_GROQ_API_KEY", "")
     fail_on = os.environ.get("INPUT_FAIL_ON", "error").lower()
+    ignore_rules = {
+        part.strip().upper()
+        for part in os.environ.get("INPUT_IGNORE_RULES", "").split(",")
+        if part.strip()
+    }
     try:
         max_findings = int(os.environ.get("INPUT_MAX_FINDINGS", DEFAULT_MAX_FINDINGS))
     except ValueError:
@@ -164,7 +169,7 @@ def main() -> int:
         return 2
 
     files = get_pr_files(repo, pr_number, token)
-    findings = review_files(files)[:max_findings]
+    findings = review_files(files, ignore_rules)[:max_findings]
     body = render_report(findings, repo, pr_number)
 
     if groq_key:
