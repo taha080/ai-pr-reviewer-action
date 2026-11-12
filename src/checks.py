@@ -299,6 +299,111 @@ def _check_comprehensions_and_lambdas(
     return findings
 
 
+def _check_imports(
+    tree: ast.AST, changed: ChangedFile, _real, source: str
+) -> list[Finding]:
+    """Python import rules IMP001–IMP003.
+
+    IMP001 (warning): ``from x import *`` — a wildcard import hides where
+    names come from. IMP002 (warning): an imported name that is never used
+    anywhere else in the added lines. IMP003 (info): an import statement
+    inside a function or class instead of at the top of the module.
+
+    IMP002 is best-effort by design: the review only sees added lines, so
+    a name imported here and used in untouched code elsewhere in the file
+    would be flagged wrongly. It is skipped entirely when the fragment
+    defines ``__all__`` (re-exported names are used by definition).
+    """
+    findings: list[Finding] = []
+
+    import_nodes: list[ast.AST] = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+
+    # IMP001 — wildcard imports.
+    for node in import_nodes:
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "*" for alias in node.names
+        ):
+            module = node.module or ""
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "IMP001",
+                    f"Wildcard import from '{module}' hides where names come from.",
+                    "Import the names you need explicitly.",
+                )
+            )
+
+    # IMP003 — imports inside a function or class body.
+    def _walk_scoped(node: ast.AST, nested: bool = False) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            nested = True
+        if nested and isinstance(node, (ast.Import, ast.ImportFrom)):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "info",
+                    "IMP003",
+                    "Import inside a function or class — keep imports at the top of the module.",
+                    "Move it to the top unless the import is genuinely circular or optional.",
+                )
+            )
+        for child in ast.iter_child_nodes(node):
+            _walk_scoped(child, nested)
+
+    _walk_scoped(tree)
+
+    # IMP002 — unused imports.
+    if "__all__" not in source:
+        # Lines covered by an import statement, so a name is not counted
+        # as "used" just because it appears in its own import line.
+        import_lines: set[int] = set()
+        for node in import_nodes:
+            start = getattr(node, "lineno", 0)
+            end = getattr(node, "end_lineno", 0) or start
+            import_lines.update(range(start, end + 1))
+        source_lines = source.split("\n")
+        rest = "\n".join(
+            line for i, line in enumerate(source_lines, start=1)
+            if i not in import_lines
+        )
+        bound: list[tuple[str, int]] = []
+        for node in import_nodes:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    bound.append(
+                        (alias.asname or alias.name.split(".")[0],
+                         getattr(node, "lineno", 0))
+                    )
+            else:
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    bound.append(
+                        (alias.asname or alias.name,
+                         getattr(node, "lineno", 0))
+                    )
+        for name, lineno in bound:
+            if not re.search(rf"\b{re.escape(name)}\b", rest):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(lineno),
+                        "warning",
+                        "IMP002",
+                        f"Imported name '{name}' is never used in the added code.",
+                        "Remove the import, or use the name — dead imports confuse the next reader.",
+                    )
+                )
+    return findings
+
+
 def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     """Run AST checks on the added lines of a Python file.
 
@@ -374,6 +479,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
                         "Split it into two functions, or pass an enum / strategy object instead.")
             )
     findings.extend(_check_comprehensions_and_lambdas(tree, changed, _real))
+    findings.extend(_check_imports(tree, changed, _real, source))
     return findings
 
 
