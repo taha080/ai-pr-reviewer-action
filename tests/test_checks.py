@@ -219,6 +219,86 @@ class TestChecks(unittest.TestCase):
         self.assertFalse(rules & {"CPL004", "CPL005", "CPL006", "CPL007"})
 
 
+class TestImportRules(unittest.TestCase):
+    def test_wildcard_import_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++from helpers import *
++result = run()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IMP001"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+
+    def test_unused_import_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++import os
++value = 42
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IMP002"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+
+    def test_used_import_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++import os
++path = os.path.join("a", "b")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "IMP002" for f in findings))
+
+    def test_aliased_unused_import_flagged_on_alias(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++import numpy as np
++import json
++data = json.dumps({})
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IMP002"]
+        self.assertEqual(len(flagged), 1)
+        self.assertIn("np", flagged[0].message)
+
+    def test_import_inside_function_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def load(path):
++    import json
++    return json.load(open(path))
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IMP003"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        # The import is used, so IMP002 must not fire for it.
+        self.assertFalse(any(f.rule == "IMP002" for f in findings))
+
+    def test_reexported_name_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++from helpers import run
++__all__ = ["run"]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "IMP002" for f in findings))
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
