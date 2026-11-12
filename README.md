@@ -1,7 +1,7 @@
 # ai-pr-reviewer-action
 
 Free, open-source GitHub Action that reviews PR diffs for **security issues,
-bug patterns, complexity and missing tests** — static analysis first, with an
+bug patterns, complexity, imports and missing tests** — static analysis first, with an
 optional AI summary when you bring your own Groq key (BYOK). No paid service,
 no data stored anywhere.
 
@@ -12,6 +12,7 @@ no data stored anywhere.
 | Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification |
 | Bugs | Bare `except:`, silent `except Exception:`, mutable default arguments, `TODO` / `FIXME` markers, string-built queries |
 | Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels, more than 5 returns, boolean flag parameters, nested or over-long comprehensions, lambdas assigned to a variable (Python AST: CPL001–CPL007; JS/TS via brace tracking) |
+| Imports | Wildcard imports, unused imports, imports inside a function or class instead of at the top of the module (Python AST: IMP001–IMP003) |
 | JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types, `eval()`, string timers, `with` statement, direct `document.cookie` access, comparator-less `.sort()`, long functions, too many parameters, deep nesting (JS011–JS018) |
 | Tests | Source files changed with no test file touched in the PR |
 | Style | Lines over 120 characters, leftover `print()` calls |
@@ -172,6 +173,16 @@ every rule category including the PR-level TST001 check. Dogfooded on real
 PR #5: the dogfood workflow passes `ignore-rules: STY002`, and the action's
 own review comment flagged BUG003 on the new `examples/ignore-example.py`
 fixture but NOT STY002, exactly as intended; the PR was merged. Release v1.1 published the same day.
+
+Day 7 (12 Nov 2026): Python import rules shipped (IMP001–IMP003, 6 new tests,
+49 passing) — wildcard imports, unused imports, and imports inside a function
+or class instead of at the top of the module. IMP002 only flags a name that is
+never used anywhere else in the added lines, and is skipped entirely when the
+fragment defines `__all__` (re-exported names are used by definition).
+Dogfooded on real PR #6: the dogfood run's review comment flagged
+IMP001/IMP002/IMP003 on the new `examples/import-example.py` fixture (plus the
+expected TST001), and the PR was merged with all 3 checks green. Next: a v1.2
+release with IMP001–IMP003, or the next rule set.
 
 ## License
 
