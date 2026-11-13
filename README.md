@@ -184,6 +184,20 @@ IMP001/IMP002/IMP003 on the new `examples/import-example.py` fixture (plus the
 expected TST001), and the PR was merged with all 3 checks green. Next: a v1.2
 release with IMP001–IMP003, or the next rule set.
 
+Day 8 (13 Nov 2026): Python naming rules shipped (NAM001–NAM004, 8 new tests,
+57 passing) — function names not in snake_case, class names not in
+PascalCase, module-level constants not in UPPER_SNAKE_CASE, and names that
+shadow a Python builtin (parameters, assignments, loop targets, and
+function/class names; methods inside a class body are exempt from the
+shadowing check since they do not hide the builtin in module scope, and
+dunder methods are exempt from the snake_case check). NAM003 only fires on
+a literal-valued module constant that already uses mixed case — plain
+lowercase module variables are left alone. Dogfooded on real PR #7: the
+action's own review comment flagged NAM001/NAM002/NAM003/NAM004 (twice) on
+the new `examples/naming-example.py` fixture (plus the expected TST001), and
+the PR was merged with all 3 checks green. Next: a v1.2 release with
+IMP001–IMP003 and NAM001–NAM004, or the next rule set.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
