@@ -25,6 +25,47 @@ MAX_NESTING_DEPTH = 3
 MAX_FUNCTION_RETURNS = 5
 MAX_COMPREHENSION_GENERATORS = 2
 
+# Builtin names worth never rebinding: rebinding one hides it for the
+# whole scope, so `list = [...]` breaks every later `list(...)` call.
+_BUILTIN_NAMES = frozenset({
+    # Types
+    "bool", "bytearray", "bytes", "complex", "dict", "float", "frozenset",
+    "int", "list", "object", "set", "slice", "str", "tuple", "type",
+    # Functions
+    "abs", "all", "any", "ascii", "bin", "breakpoint", "callable", "chr",
+    "compile", "delattr", "dir", "divmod", "enumerate", "eval", "exec",
+    "filter", "format", "getattr", "globals", "hasattr", "hash", "help",
+    "hex", "id", "input", "isinstance", "issubclass", "iter", "len",
+    "locals", "map", "max", "memoryview", "min", "next", "oct", "open",
+    "ord", "pow", "print", "range", "repr", "reversed", "round", "setattr",
+    "sorted", "sum", "super", "vars", "zip",
+    # Common exceptions
+    "ArithmeticError", "AssertionError", "AttributeError", "Exception",
+    "FileNotFoundError", "ImportError", "IndexError", "KeyError",
+    "LookupError", "NameError", "NotImplementedError", "OSError",
+    "RuntimeError", "StopIteration", "TypeError", "ValueError",
+    "ZeroDivisionError",
+})
+
+_SNAKE_CASE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_PASCAL_CASE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+_UPPER_SNAKE_CASE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _to_snake_case(name: str) -> str:
+    """CamelCase / mixedCase → snake_case (GetUserData → get_user_data)."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _to_pascal_case(name: str) -> str:
+    """snake_case → PascalCase (user_record → UserRecord)."""
+    return "".join(part[:1].upper() + part[1:] for part in name.split("_") if part)
+
+
+def _to_upper_snake_case(name: str) -> str:
+    """CamelCase / mixedCase → UPPER_SNAKE_CASE (MaxRetries → MAX_RETRIES)."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
+
 
 @dataclass
 class Finding:
@@ -404,6 +445,159 @@ def _check_imports(
     return findings
 
 
+def _check_naming(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python naming rules NAM001–NAM004 (PEP 8 conventions).
+
+    NAM001 (info): a function or method name that is not snake_case
+    (dunder methods such as ``__init__`` are exempt). NAM002 (info): a
+    class name that is not PascalCase. NAM003 (info): a module-level
+    constant — a name assigned a literal value — that uses mixed case
+    instead of UPPER_SNAKE_CASE; plain lowercase module variables are
+    left alone, and names starting with an underscore are exempt.
+    NAM004 (warning): a name that shadows a Python builtin — a function
+    or class name, a parameter, or any assignment / loop / ``with``
+    target. Method names inside a class body are exempt from NAM004: a
+    method does not shadow the builtin in module scope.
+    """
+    findings: list[Finding] = []
+
+    def _is_dunder(name: str) -> bool:
+        return name.startswith("__") and name.endswith("__")
+
+    # NAM003 — module-level constants in the wrong case.
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is None or not isinstance(value, ast.Constant):
+            continue
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+        )
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            name = target.id
+            if name.startswith("_") or _is_dunder(name):
+                continue
+            if any(ch.isupper() for ch in name) and not _UPPER_SNAKE_CASE.match(name):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "info",
+                        "NAM003",
+                        f"Module-level constant '{name}' is not UPPER_SNAKE_CASE.",
+                        f"Rename it to '{_to_upper_snake_case(name)}'.",
+                    )
+                )
+
+    # NAM001 / NAM002 / NAM004 — walk every definition and binding.
+    def _walk(node: ast.AST, in_class: bool = False) -> None:
+        if isinstance(node, ast.ClassDef):
+            if not _PASCAL_CASE.match(node.name):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "info",
+                        "NAM002",
+                        f"Class name '{node.name}' is not PascalCase.",
+                        f"Rename it to '{_to_pascal_case(node.name)}'.",
+                    )
+                )
+            if node.name in _BUILTIN_NAMES:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "NAM004",
+                        f"Class name '{node.name}' shadows the Python builtin '{node.name}'.",
+                        "Pick a different name so the builtin stays available.",
+                    )
+                )
+            for child in ast.iter_child_nodes(node):
+                _walk(child, True)
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not _is_dunder(node.name) and not _SNAKE_CASE.match(node.name):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "info",
+                        "NAM001",
+                        f"Function name '{node.name}' is not snake_case.",
+                        f"Rename it to '{_to_snake_case(node.name)}'.",
+                    )
+                )
+            if not in_class and node.name in _BUILTIN_NAMES:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "NAM004",
+                        f"Function name '{node.name}' shadows the Python builtin '{node.name}'.",
+                        "Pick a different name so the builtin stays available.",
+                    )
+                )
+            params = (
+                list(node.args.posonlyargs)
+                + list(node.args.args)
+                + list(node.args.kwonlyargs)
+            )
+            for arg in params:
+                if arg.arg in _BUILTIN_NAMES:
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "NAM004",
+                            f"Parameter '{arg.arg}' in '{node.name}' shadows the Python builtin '{arg.arg}'.",
+                            "Rename the parameter — shadowing a builtin hides it for the whole function body.",
+                        )
+                    )
+            for arg in (node.args.vararg, node.args.kwarg):
+                if arg is not None and arg.arg in _BUILTIN_NAMES:
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "NAM004",
+                            f"Parameter '{arg.arg}' in '{node.name}' shadows the Python builtin '{arg.arg}'.",
+                            "Rename the parameter — shadowing a builtin hides it for the whole function body.",
+                        )
+                    )
+            for child in ast.iter_child_nodes(node):
+                _walk(child, in_class)
+            return
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            if node.id in _BUILTIN_NAMES:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "NAM004",
+                        f"Name '{node.id}' shadows the Python builtin '{node.id}'.",
+                        "Pick a different name so the builtin stays available.",
+                    )
+                )
+        for child in ast.iter_child_nodes(node):
+            _walk(child, in_class)
+
+    _walk(tree)
+    return findings
+
+
 def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     """Run AST checks on the added lines of a Python file.
 
@@ -480,6 +674,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
             )
     findings.extend(_check_comprehensions_and_lambdas(tree, changed, _real))
     findings.extend(_check_imports(tree, changed, _real, source))
+    findings.extend(_check_naming(tree, changed, _real))
     return findings
 
 
