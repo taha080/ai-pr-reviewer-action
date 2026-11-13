@@ -299,6 +299,121 @@ class TestImportRules(unittest.TestCase):
         self.assertFalse(any(f.rule == "IMP002" for f in findings))
 
 
+class TestNamingRules(unittest.TestCase):
+    def test_function_name_not_snake_case_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def GetUserData(user_id):
++    return user_id
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "NAM001"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertIn("get_user_data", flagged[0].suggestion)
+
+    def test_snake_case_and_dunder_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def get_user_data(user_id):
++    return user_id
++class Cache:
++    def __init__(self):
++        pass
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "NAM001" for f in findings))
+
+    def test_class_name_not_pascal_case_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++class user_record:
++    pass
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "NAM002"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertIn("UserRecord", flagged[0].suggestion)
+
+    def test_pascal_case_class_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++class UserRecord:
++    pass
++class HTTPServer:
++    pass
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "NAM002" for f in findings))
+
+    def test_module_constant_wrong_case_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++MaxRetries = 3
++TIMEOUT = 30
++max_retries = 3
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "NAM003"]
+        self.assertEqual(len(flagged), 1)  # MaxRetries only
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertIn("MAX_RETRIES", flagged[0].suggestion)
+
+    def test_builtin_shadow_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def process(list, type):
++    return len(list)
++list = [1, 2]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "NAM004"]
+        # Two shadowed parameters + one shadowed assignment.
+        self.assertEqual(len(flagged), 3)
+        self.assertTrue(all(f.severity == "warning" for f in flagged))
+
+    def test_method_shadowing_builtin_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++class Cache:
++    def id(self):
++        return 1
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "NAM004" for f in findings))
+
+    def test_clean_names_no_naming_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++MAX_RETRIES = 3
++timeout = 30
++def fetch_user(user_id):
++    return users.get(user_id)
++class UserRecord:
++    pass
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(rules & {"NAM001", "NAM002", "NAM003", "NAM004"})
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
