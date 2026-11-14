@@ -1,7 +1,7 @@
 # ai-pr-reviewer-action
 
 Free, open-source GitHub Action that reviews PR diffs for **security issues,
-bug patterns, complexity, imports and missing tests** — static analysis first, with an
+bug patterns, complexity, imports, style and missing tests** — static analysis first, with an
 optional AI summary when you bring your own Groq key (BYOK). No paid service,
 no data stored anywhere.
 
@@ -15,7 +15,7 @@ no data stored anywhere.
 | Imports | Wildcard imports, unused imports, imports inside a function or class instead of at the top of the module (Python AST: IMP001–IMP003) |
 | JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types, `eval()`, string timers, `with` statement, direct `document.cookie` access, comparator-less `.sort()`, long functions, too many parameters, deep nesting (JS011–JS018) |
 | Tests | Source files changed with no test file touched in the PR |
-| Style | Lines over 120 characters, leftover `print()` calls |
+| Style | Lines over 120 characters, leftover `print()` calls, trailing whitespace, multiple statements on one line, `==` comparisons to `None`/`True`/`False`, tab indentation (Python AST: STY003–STY006) |
 
 Checks run on **added lines only** — it never nags about pre-existing code.
 Every finding carries a stable rule id (`SEC001`, `BUG005`, `CPL001`, …),
@@ -197,6 +197,18 @@ action's own review comment flagged NAM001/NAM002/NAM003/NAM004 (twice) on
 the new `examples/naming-example.py` fixture (plus the expected TST001), and
 the PR was merged with all 3 checks green. Next: a v1.2 release with
 IMP001–IMP003 and NAM001–NAM004, or the next rule set.
+
+Day 9 (14 Nov 2026): Python style rules shipped (STY003–STY006, 7 new tests,
+64 passing) — trailing whitespace, multiple statements on one line separated
+by `;`, comparisons to `None`/`True`/`False` with `==`/`!=` instead of
+`is`/`is not`, and tab indentation. STY004 and STY005 are AST checks (two
+statements share a line number; a comparison node with a singleton operand),
+while STY003 and STY006 are line checks that run on every file type.
+Dogfooded on real PR #8: the action's own review comment flagged STY003,
+STY004, STY005 (twice) and STY006 on the new `examples/style-example.py`
+fixture (plus the expected TST001), and the PR was merged with all 3 checks
+green. Next: a v1.2 release with IMP001–IMP003, NAM001–NAM004 and STY003–STY006,
+or the next rule set.
 
 ## License
 
