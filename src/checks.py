@@ -187,6 +187,18 @@ STYLE_RULES: list[_LineRule] = [
         "print() left in added code.",
         "Use logging (or remove it) so output stays structured in production.",
     ),
+    _LineRule(
+        _r(r"[ \t]+$"),
+        "info", "STY003",
+        "Trailing whitespace at the end of the line.",
+        "Delete the trailing spaces or tabs — most editors can strip them on save.",
+    ),
+    _LineRule(
+        _r(r"^\t"),
+        "info", "STY006",
+        "Line is indented with a tab instead of spaces.",
+        "Indent with spaces (4 per level in Python) so the code looks the same in every editor.",
+    ),
 ]
 
 
@@ -598,6 +610,79 @@ def _check_naming(
     return findings
 
 
+def _check_style(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python style rules STY004–STY005 (AST-based).
+
+    STY004 (warning): two or more statements on one line, separated by
+    ``;`` — the statements share a line number in the AST but sit at
+    different columns. STY005 (warning): comparing a value to a
+    singleton (``None``, ``True``, ``False``) with ``==`` or ``!=``
+    instead of ``is`` / ``is not``.
+    """
+    findings: list[Finding] = []
+
+    # STY004 — statements sharing a line.
+    flagged_lines: set[int] = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list) or len(body) < 2:
+            continue
+        by_line: dict[int, int] = {}
+        for stmt in body:
+            lineno = getattr(stmt, "lineno", 0)
+            by_line[lineno] = by_line.get(lineno, 0) + 1
+        for lineno, count in by_line.items():
+            if count > 1 and lineno not in flagged_lines:
+                flagged_lines.add(lineno)
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(lineno),
+                        "warning",
+                        "STY004",
+                        f"{count} statements on one line, separated by ';'.",
+                        "Put each statement on its own line — it reads far better.",
+                    )
+                )
+
+    # STY005 — == / != against a singleton.
+    _SINGLETONS = (None, True, False)
+
+    def _is_singleton(expr: ast.expr) -> str | None:
+        if isinstance(expr, ast.Constant):
+            for value in _SINGLETONS:
+                if expr.value is value:
+                    return repr(value)
+        return None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        for op, comparator in zip(node.ops, node.comparators):
+            if not isinstance(op, (ast.Eq, ast.NotEq)):
+                continue
+            name = _is_singleton(node.left) or _is_singleton(comparator)
+            if name is None:
+                continue
+            verb = "==" if isinstance(op, ast.Eq) else "!="
+            replacement = "is" if isinstance(op, ast.Eq) else "is not"
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "STY005",
+                    f"Comparison to {name} with '{verb}' — use '{replacement}' instead.",
+                    f"Singletons are compared by identity: 'x {replacement} {name}'.",
+                )
+            )
+            break
+
+    return findings
+
+
 def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     """Run AST checks on the added lines of a Python file.
 
@@ -675,6 +760,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_comprehensions_and_lambdas(tree, changed, _real))
     findings.extend(_check_imports(tree, changed, _real, source))
     findings.extend(_check_naming(tree, changed, _real))
+    findings.extend(_check_style(tree, changed, _real))
     return findings
 
 
