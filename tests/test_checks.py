@@ -414,6 +414,107 @@ class TestNamingRules(unittest.TestCase):
         self.assertFalse(rules & {"NAM001", "NAM002", "NAM003", "NAM004"})
 
 
+class TestStyleRules(unittest.TestCase):
+    def test_trailing_whitespace_flagged(self):
+        diff = (
+            "diff --git a/x.py b/x.py\n"
+            "--- a/x.py\n"
+            "+++ b/x.py\n"
+            "@@ -1,0 +1,2 @@\n"
+            "+value = 1   \n"
+            "+clean = 2\n"
+        )
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STY003"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_clean_lines_have_no_trailing_whitespace_finding(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++value = 1
++clean = 2
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "STY003" for f in findings))
+
+    def test_semicolon_statements_flagged_once(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++name = "a"; count = 2
++total = 3
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STY004"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_comparison_to_singleton_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def check(flag):
++    if flag == None:
++        return True
++    if flag == False:
++        return False
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STY005"]
+        self.assertEqual(len(flagged), 2)
+        self.assertTrue(all(f.severity == "warning" for f in flagged))
+        self.assertIn("None", flagged[0].message)
+
+    def test_identity_comparison_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def check(flag):
++    if flag is None:
++        return True
++    return flag is not False
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "STY005" for f in findings))
+
+    def test_tab_indentation_flagged(self):
+        diff = (
+            "diff --git a/x.py b/x.py\n"
+            "--- a/x.py\n"
+            "+++ b/x.py\n"
+            "@@ -1,0 +1,2 @@\n"
+            "+def tabbed():\n"
+            "+\treturn 1\n"
+        )
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STY006"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_clean_style_has_no_new_style_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def check(flag):
++    if flag is None:
++        return True
++    return False
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(rules & {"STY003", "STY004", "STY005", "STY006"})
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
