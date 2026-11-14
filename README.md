@@ -208,7 +208,7 @@ Dogfooded on real PR #8: the action's own review comment flagged STY003,
 STY004, STY005 (twice) and STY006 on the new `examples/style-example.py`
 fixture (plus the expected TST001), and the PR was merged with all 3 checks
 green. Next: a v1.2 release with IMP001–IMP003, NAM001–NAM004 and STY003–STY006,
-or the next rule set.
+or the next rule set. Release v1.2 published the same day.
 
 ## License
 
