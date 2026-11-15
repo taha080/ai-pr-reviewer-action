@@ -515,6 +515,154 @@ class TestStyleRules(unittest.TestCase):
         self.assertFalse(rules & {"STY003", "STY004", "STY005", "STY006"})
 
 
+class TestErrorRules(unittest.TestCase):
+    def test_silent_except_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    load_config()
++except ValueError:
++    pass
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ERR001"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_except_with_logging_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    load_config()
++except ValueError as e:
++    logger.warning("config failed: %s", e)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "ERR001" for f in findings))
+
+    def test_raise_without_from_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    load_config()
++except ValueError as e:
++    raise RuntimeError("bad config")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ERR002"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_raise_with_from_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    load_config()
++except ValueError as e:
++    raise RuntimeError("bad config") from e
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "ERR002" for f in findings))
+
+    def test_bare_reraise_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    load_config()
++except ValueError:
++    raise
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "ERR002" for f in findings))
+
+    def test_raise_from_none_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    load_config()
++except ValueError as e:
++    raise RuntimeError("bad config") from None
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "ERR002" for f in findings))
+
+    def test_base_exception_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    stop_server()
++except BaseException:
++    cleanup()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ERR003"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_base_exception_in_tuple_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    stop_server()
++except (ValueError, BaseException):
++    cleanup()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ERR003"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_useless_try_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++try:
++    pass
++except ValueError:
++    handle_error()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ERR004"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_clean_error_handling_no_err_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++try:
++    load_config()
++except ValueError as e:
++    logger.warning("config failed: %s", e)
++    raise RuntimeError("bad config") from e
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(rules & {"ERR001", "ERR002", "ERR003", "ERR004"})
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
