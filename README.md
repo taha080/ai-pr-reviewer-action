@@ -45,7 +45,17 @@ jobs:
 The action posts **one comment per PR** and updates it on every push, so your
 PR thread stays clean. `fail-on: error` (the default) fails the check when a
 blocking finding exists; use `warning` to also fail on warnings, or `none`
-to report without failing.
+to report without failing. If two workflows review the same PR (for example
+this repo's dogfood workflow alongside the released action), give each a
+different `comment-marker` so each keeps its own comment instead of
+overwriting the other's:
+
+```yaml
+      - uses: taha080/ai-pr-reviewer-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-marker: security-scan   # its own comment, updated in place
+```
 
 To silence rules you have deliberately decided not to enforce, pass their
 ids to `ignore-rules` (comma-separated, case-insensitive):
@@ -80,6 +90,7 @@ Without it the action still reviews fully on static analysis alone.
 | `fail-on` | no | `error` | `error`, `warning` or `none` |
 | `max-findings` | no | `30` | Max findings included in the comment |
 | `ignore-rules` | no | `""` | Comma-separated rule ids to skip, e.g. `STY002, BUG003` |
+| `comment-marker` | no | `""` | Name for this run's comment; two workflows on one PR need different markers |
 | `pr-number` | no | `""` | PR to review (defaults to the triggering PR) |
 
 ## Outputs
