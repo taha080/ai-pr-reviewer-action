@@ -234,8 +234,10 @@ TST001 + STY002 — the two comments no longer overwrite each other, fixing
 the clash seen on PRs #6–#8, where the later run kept overwriting the
 shared comment. Note: the example run did not flag STY003 because the `v1`
 tag still pointed at the Day 2 code (7 Nov) — the major tag was never moved
-for v1.1 or v1.2. Release v1.3 published the same day, and the `v1` tag was
-re-pointed at it so `@v1` users get the current rules. Next: the next rule
+for v1.1 or v1.2. Release v1.3 published the same day. Note: the `v1` tag
+still points at the Day 2 code — the release edit page offers no way to
+move a tag, so `@v1` users still get the old rules until the tag is moved
+with a git tag push (follow-up). Next: the next rule
 set (e.g. Python error-handling rules), or a first check for another language.
 
 ## License
