@@ -7,9 +7,36 @@ verdict, then a table of counts, then the findings grouped by severity.
 
 from __future__ import annotations
 
+import re
+
 from .checks import Finding
 
 MARKER = "<!-- ai-pr-reviewer -->"
+
+# Characters allowed inside a custom marker name. Anything else is dropped,
+# so a marker can never break out of its HTML comment or collide with the
+# default marker by accident.
+_MARKER_SAFE = re.compile(r"[^A-Za-z0-9_-]")
+_MAX_MARKER_LEN = 40
+
+
+def make_marker(name: str = "") -> str:
+    """Build the hidden HTML comment that keys a review comment.
+
+    The default (no name) is ``<!-- ai-pr-reviewer -->``. A name gives a
+    namespaced marker, e.g. ``make_marker("dogfood")`` returns
+    ``<!-- ai-pr-reviewer:dogfood -->``, so two workflows reviewing the
+    same PR each keep their own comment instead of overwriting each other.
+    Unsafe characters are stripped and an empty result falls back to the
+    default marker.
+    """
+    clean = _MARKER_SAFE.sub("", (name or "").strip())[:_MAX_MARKER_LEN]
+    # Collapse runs of "-" and drop leading/trailing ones, so the name can
+    # never contain "--" and break out of its HTML comment.
+    clean = re.sub(r"-+", "-", clean).strip("-")
+    if not clean:
+        return MARKER
+    return f"<!-- ai-pr-reviewer:{clean} -->"
 
 _SEVERITY_LABEL = {
     "error": "🔴 Error",
@@ -29,9 +56,10 @@ def verdict(findings: list[Finding]) -> str:
     return "✅ No issues found — looks good to merge."
 
 
-def render_report(findings: list[Finding], repo: str, pr_number: int) -> str:
+def render_report(findings: list[Finding], repo: str, pr_number: int,
+                  marker: str = MARKER) -> str:
     """Render the full Markdown comment body for a PR review."""
-    lines = [MARKER, f"## 🤖 AI PR Review — #{pr_number}", "", verdict(findings), ""]
+    lines = [marker, f"## 🤖 AI PR Review — #{pr_number}", "", verdict(findings), ""]
     if not findings:
         lines.append("Static checks found no security issues, bug patterns, "
                      "complexity problems or missing tests in the added lines.")
