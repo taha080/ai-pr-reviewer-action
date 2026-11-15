@@ -31,6 +31,10 @@ inputs:
     description: "PR number to review (defaults to the PR that triggered the workflow)"
     required: false
     default: ""
+  comment-marker:
+    description: "Name for this run's review comment (letters, digits, - and _). Two workflows reviewing the same PR should use different markers so each keeps its own comment instead of overwriting the other."
+    required: false
+    default: ""
 
 outputs:
   findings:
@@ -60,4 +64,5 @@ runs:
         INPUT_MAX_FINDINGS: ${{ inputs.max-findings }}
         INPUT_IGNORE_RULES: ${{ inputs.ignore-rules }}
         INPUT_PR_NUMBER: ${{ inputs.pr-number }}
+        INPUT_COMMENT_MARKER: ${{ inputs.comment-marker }}
       run: python3 "${{ github.action_path }}/src/main.py"
