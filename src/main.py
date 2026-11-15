@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.checks import review_files  # noqa: E402
 from src.diffparse import ChangedFile, parse_patch  # noqa: E402
-from src.report import MARKER, render_report, verdict  # noqa: E402
+from src.report import MARKER, make_marker, render_report, verdict  # noqa: E402
 
 GITHUB_API = "https://api.github.com"
 GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
@@ -69,8 +69,14 @@ def get_pr_files(repo: str, pr_number: int, token: str) -> list[ChangedFile]:
     return files
 
 
-def find_existing_comment(repo: str, pr_number: int, token: str) -> int | None:
-    """Return the id of our previous review comment, if one exists."""
+def find_existing_comment(repo: str, pr_number: int, token: str,
+                          marker: str = MARKER) -> int | None:
+    """Return the id of our previous review comment with this marker, if one exists.
+
+    The marker scopes the search: a run with ``comment-marker: dogfood``
+    only ever finds (and updates) its own ``ai-pr-reviewer:dogfood``
+    comment, never another workflow's default-marker comment.
+    """
     page = 1
     while True:
         comments = _github_request(
@@ -81,14 +87,15 @@ def find_existing_comment(repo: str, pr_number: int, token: str) -> int | None:
         if not isinstance(comments, list) or not comments:
             return None
         for comment in comments:
-            if MARKER in comment.get("body", ""):
+            if marker in comment.get("body", ""):
                 return comment["id"]
         page += 1
 
 
-def post_or_update_comment(repo: str, pr_number: int, token: str, body: str) -> None:
+def post_or_update_comment(repo: str, pr_number: int, token: str, body: str,
+                           marker: str = MARKER) -> None:
     """Create the review comment, or update the existing one in place."""
-    existing = find_existing_comment(repo, pr_number, token)
+    existing = find_existing_comment(repo, pr_number, token, marker)
     if existing:
         _github_request(
             "PATCH", f"{GITHUB_API}/repos/{repo}/issues/comments/{existing}",
@@ -145,6 +152,7 @@ def main() -> int:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     groq_key = os.environ.get("INPUT_GROQ_API_KEY", "")
     fail_on = os.environ.get("INPUT_FAIL_ON", "error").lower()
+    marker = make_marker(os.environ.get("INPUT_COMMENT_MARKER", ""))
     ignore_rules = {
         part.strip().upper()
         for part in os.environ.get("INPUT_IGNORE_RULES", "").split(",")
@@ -170,7 +178,7 @@ def main() -> int:
 
     files = get_pr_files(repo, pr_number, token)
     findings = review_files(files, ignore_rules)[:max_findings]
-    body = render_report(findings, repo, pr_number)
+    body = render_report(findings, repo, pr_number, marker=marker)
 
     if groq_key:
         findings_text = "\n".join(
@@ -181,7 +189,7 @@ def main() -> int:
         if summary:
             body += f"\n\n### 🧠 AI summary (Groq, BYOK)\n\n{summary}\n"
 
-    post_or_update_comment(repo, pr_number, token, body)
+    post_or_update_comment(repo, pr_number, token, body, marker)
 
     _set_output("findings", str(len(findings)))
     _set_output("errors", str(sum(1 for f in findings if f.severity == "error")))
