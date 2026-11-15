@@ -610,6 +610,126 @@ def _check_naming(
     return findings
 
 
+def _check_errors(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python error-handling rules ERR001–ERR004 (AST-based).
+
+    ERR001 (warning): an ``except`` handler whose body is only ``pass``
+    (or ``...``) — the error is swallowed silently. ERR002 (warning):
+    raising a new exception inside an ``except`` handler without
+    ``from`` — the original traceback context is lost. ERR003
+    (warning): catching ``BaseException`` — it also swallows
+    ``KeyboardInterrupt`` and ``SystemExit``. ERR004 (info): a ``try``
+    block whose body is only ``pass`` — the ``try`` does nothing.
+    """
+    findings: list[Finding] = []
+
+    def _is_silent(body: list[ast.stmt]) -> bool:
+        if len(body) != 1:
+            return False
+        stmt = body[0]
+        if isinstance(stmt, ast.Pass):
+            return True
+        return (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value is Ellipsis
+        )
+
+    def _handler_catches_base(handler: ast.ExceptHandler) -> bool:
+        def _names(expr: ast.expr | None) -> list[str]:
+            if expr is None:
+                return []
+            if isinstance(expr, ast.Name):
+                return [expr.id]
+            if isinstance(expr, ast.Attribute):
+                return [expr.attr]
+            if isinstance(expr, ast.Tuple):
+                names: list[str] = []
+                for elt in expr.elts:
+                    names.extend(_names(elt))
+                return names
+            return []
+
+        return "BaseException" in _names(handler.type)
+
+    def _walk_raises(node: ast.AST) -> None:
+        """Flag `raise <new>` without `from` inside an except handler.
+
+        Does not descend into nested except handlers (the top-level loop
+        visits them separately) or into nested function/class bodies — a
+        raise there runs outside the handler's dynamic scope.
+        """
+        if isinstance(node, ast.ExceptHandler):
+            return
+        if isinstance(node, ast.Raise):
+            if node.exc is not None and node.cause is None:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "ERR002",
+                        "Raising a new exception inside an except handler without 'from' loses the original traceback.",
+                        "Chain it explicitly: 'raise NewError(...) from e'.",
+                    )
+                )
+            return
+        if isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+        ):
+            return
+        for child in ast.iter_child_nodes(node):
+            _walk_raises(child)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        # ERR004 — a try block that does nothing.
+        if _is_silent(node.body):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "info",
+                    "ERR004",
+                    "try block whose body is only 'pass' does nothing.",
+                    "Remove the try, or put the fallible code inside it.",
+                )
+            )
+        for handler in node.handlers:
+            # ERR001 — a handler that silently swallows the error.
+            if _is_silent(handler.body):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(handler, "lineno", 0)),
+                        "warning",
+                        "ERR001",
+                        "except handler silently swallows the error (body is only 'pass').",
+                        "Log the error, handle it, or re-raise — silent excepts hide failures.",
+                    )
+                )
+            # ERR003 — catching BaseException.
+            if _handler_catches_base(handler):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(handler, "lineno", 0)),
+                        "warning",
+                        "ERR003",
+                        "Catching BaseException also swallows KeyboardInterrupt and SystemExit.",
+                        "Catch Exception (or a narrower type) instead.",
+                    )
+                )
+            # ERR002 — raise without `from` inside the handler.
+            for stmt in handler.body:
+                _walk_raises(stmt)
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -761,6 +881,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_imports(tree, changed, _real, source))
     findings.extend(_check_naming(tree, changed, _real))
     findings.extend(_check_style(tree, changed, _real))
+    findings.extend(_check_errors(tree, changed, _real))
     return findings
 
 
