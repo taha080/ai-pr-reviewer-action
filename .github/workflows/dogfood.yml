@@ -21,3 +21,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fail-on: none
           ignore-rules: STY002
+          # The dogfood run keeps its own comment (marker "dogfood") so it
+          # never overwrites the released action's comment on the same PR.
+          comment-marker: dogfood
