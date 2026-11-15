@@ -1,7 +1,7 @@
 # ai-pr-reviewer-action
 
 Free, open-source GitHub Action that reviews PR diffs for **security issues,
-bug patterns, complexity, imports, style and missing tests** — static analysis first, with an
+bug patterns, complexity, imports, error handling, style and missing tests** — static analysis first, with an
 optional AI summary when you bring your own Groq key (BYOK). No paid service,
 no data stored anywhere.
 
@@ -11,6 +11,7 @@ no data stored anywhere.
 | --- | --- |
 | Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification |
 | Bugs | Bare `except:`, silent `except Exception:`, mutable default arguments, `TODO` / `FIXME` markers, string-built queries |
+| Error handling | Silent `except` handlers (body is only `pass`), raising a new exception inside a handler without `from`, catching `BaseException`, a `try` block that does nothing (Python AST: ERR001–ERR004) |
 | Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels, more than 5 returns, boolean flag parameters, nested or over-long comprehensions, lambdas assigned to a variable (Python AST: CPL001–CPL007; JS/TS via brace tracking) |
 | Imports | Wildcard imports, unused imports, imports inside a function or class instead of at the top of the module (Python AST: IMP001–IMP003) |
 | JavaScript / TypeScript | Leftover `console.log`, `debugger`, `var`, loose `==` / `!=`, `document.write`, `innerHTML` assignment, `parseInt` without a radix, blocking dialogs, `new Function()`, `: any` types, `eval()`, string timers, `with` statement, direct `document.cookie` access, comparator-less `.sort()`, long functions, too many parameters, deep nesting (JS011–JS018) |
@@ -239,6 +240,23 @@ still points at the Day 2 code — the release edit page offers no way to
 move a tag, so `@v1` users still get the old rules until the tag is moved
 with a git tag push (follow-up). Next: the next rule
 set (e.g. Python error-handling rules), or a first check for another language.
+
+Day 11 (15 Nov 2026): Python error-handling rules shipped (ERR001–ERR004,
+10 new tests, 83 passing) — an `except` handler whose body is only `pass`
+silently swallows the error, raising a new exception inside a handler without
+`from` loses the original traceback (a bare re-raise and `raise ... from e`
+or `from None` are left alone), catching `BaseException` also swallows
+`KeyboardInterrupt` and `SystemExit`, and a `try` block whose body is only
+`pass` does nothing. The checks are AST-based, so a nested handler's raise
+is reported once, on the handler that owns it, and a raise inside a nested
+function defined in a handler is not flagged. Dogfooded on real PR #10: the
+action's own review comment flagged ERR001/ERR002/ERR003/ERR004 on the new
+`examples/error-example.py` fixture (plus the expected TST001), and the PR
+was merged with all 3 checks green. Release v1.4 published the same day.
+Note: the `v1` tag still points at the Day 2 code — the release edit page
+offers no way to move a tag, so `@v1` users still get the old rules until
+the tag is moved with a git tag push (follow-up). Next: the next rule set,
+or a first check for another language.
 
 ## License
 
