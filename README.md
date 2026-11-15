@@ -221,6 +221,23 @@ fixture (plus the expected TST001), and the PR was merged with all 3 checks
 green. Next: a v1.2 release with IMP001–IMP003, NAM001–NAM004 and STY003–STY006,
 or the next rule set. Release v1.2 published the same day.
 
+Day 10 (15 Nov 2026): `comment-marker` input shipped (9 new tests,
+73 passing) — give each workflow reviewing the same PR a different marker
+name and each keeps its own review comment, keyed by a hidden HTML comment
+(`<!-- ai-pr-reviewer:<name> -->`); names are sanitised (only letters,
+digits, `-` and `_`, runs of `-` collapsed) and an empty name falls back
+to the default marker. The repo's own dogfood workflow now uses
+`comment-marker: dogfood`. Dogfooded on real PR #9: the dogfood run's
+comment flagged TST001 + STY003 (and no STY002, which dogfood ignores),
+while the released example run posted its own separate comment flagging
+TST001 + STY002 — the two comments no longer overwrite each other, fixing
+the clash seen on PRs #6–#8, where the later run kept overwriting the
+shared comment. Note: the example run did not flag STY003 because the `v1`
+tag still pointed at the Day 2 code (7 Nov) — the major tag was never moved
+for v1.1 or v1.2. Release v1.3 published the same day, and the `v1` tag was
+re-pointed at it so `@v1` users get the current rules. Next: the next rule
+set (e.g. Python error-handling rules), or a first check for another language.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
