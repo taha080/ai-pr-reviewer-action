@@ -9,7 +9,7 @@ no data stored anywhere.
 
 | Category | Examples |
 | --- | --- |
-| Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification |
+| Security | Hardcoded credentials, `eval()` / `exec()`, shell injection (`shell=True`, `os.system`), unsafe `pickle` / `yaml.load`, weak hashes, disabled TLS verification; string commands to `subprocess`, `os.popen()`, `random` for tokens, `assert` outside tests, `tempfile.mktemp()`, world-writable `os.chmod()` (Python AST: SEC101–SEC105) |
 | Bugs | Bare `except:`, silent `except Exception:`, mutable default arguments, `TODO` / `FIXME` markers, string-built queries |
 | Error handling | Silent `except` handlers (body is only `pass`), raising a new exception inside a handler without `from`, catching `BaseException`, a `try` block that does nothing (Python AST: ERR001–ERR004) |
 | Complexity | Functions over 50 lines, over 5 arguments, nesting deeper than 3 levels, more than 5 returns, boolean flag parameters, nested or over-long comprehensions, lambdas assigned to a variable (Python AST: CPL001–CPL007; JS/TS via brace tracking) |
@@ -257,6 +257,8 @@ Note: the `v1` tag still points at the Day 2 code — the release edit page
 offers no way to move a tag, so `@v1` users still get the old rules until
 the tag is moved with a git tag push (follow-up). Next: the next rule set,
 or a first check for another language.
+
+Day 12 (16 Nov 2026): Python security rules shipped (SEC101–SEC105, 11 new tests, 94 passing) — a subprocess call given a string command instead of a list, os.popen() which always runs through the shell, the random module used to build a token/password/secret (use secrets instead), assert statements outside test code (stripped with python -O), tempfile.mktemp() with its predictable filenames, and os.chmod() with a world-writable mode. The checks are AST-based and best-effort by design: a variable holding the command cannot be checked, so only literal strings and f-strings are flagged for SEC101, and SEC102 only fires on a direct random.* call assigned to a sensitively-named variable. Dogfooded on real PR #11: the action's own review comment flagged SEC101 (three times), SEC102, SEC103, SEC104 and SEC105 on the new examples/security-example.py fixture (plus the expected TST001), and the PR was merged with all 3 checks green. Release v1.5 published the same day. Note: the v1 tag still points at the Day 2 code — the release edit page offers no way to move a tag, so @v1 users still get the old rules until the tag is moved with a git tag push (follow-up). Next: the next rule set, or a first check for another language.
 
 ## License
 
