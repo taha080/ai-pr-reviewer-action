@@ -663,6 +663,162 @@ class TestErrorRules(unittest.TestCase):
         self.assertFalse(rules & {"ERR001", "ERR002", "ERR003", "ERR004"})
 
 
+class TestSecurityRules(unittest.TestCase):
+    def test_subprocess_string_command_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++import subprocess
++subprocess.run("ls -la")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "SEC101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_subprocess_fstring_command_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++import subprocess
++subprocess.run(f"ls {directory}")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "SEC101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_subprocess_list_command_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++import subprocess
++subprocess.run(["ls", "-la"])
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "SEC101" for f in findings))
+
+    def test_os_popen_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++import os
++def read_file(name):
++    return os.popen("cat " + name).read()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "SEC101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_random_token_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++import random
++import string
++token = random.choice(string.ascii_letters)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "SEC102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertIn("token", flagged[0].message)
+
+    def test_random_ordinary_variable_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++import random
++roll = random.randint(1, 6)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "SEC102" for f in findings))
+
+    def test_assert_outside_tests_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def check_user(user):
++    assert user is not None, "user required"
++    return user
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "SEC103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_assert_in_test_file_not_flagged(self):
+        diff = """diff --git a/tests/test_example.py b/tests/test_example.py
+--- a/tests/test_example.py
++++ b/tests/test_example.py
+@@ -1,0 +1,2 @@
++def test_something():
++    assert 1 + 1 == 2
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "SEC103" for f in findings))
+
+    def test_mktemp_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++import tempfile
++path = tempfile.mktemp()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "SEC104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_chmod_world_writable_flagged_only(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++import os
++os.chmod(path, 0o777)
++os.chmod(other, 0o600)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "SEC105"]
+        self.assertEqual(len(flagged), 1)  # 0o777 only; 0o600 is fine
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertIn("0o777", flagged[0].message)
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_clean_security_no_new_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++import os
++import secrets
++import subprocess
++import tempfile
++token = secrets.token_hex(16)
++subprocess.run(["ls", "-la"])
++handle = tempfile.NamedTemporaryFile()
++os.chmod(path, 0o600)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"SEC101", "SEC102", "SEC103", "SEC104", "SEC105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
