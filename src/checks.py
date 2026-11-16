@@ -730,6 +730,174 @@ def _check_errors(
     return findings
 
 
+def _dotted_name(node: ast.AST) -> str:
+    """Rebuild the dotted name of a call target (``subprocess.run``)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted_name(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    return ""
+
+
+_SUBPROCESS_FUNCS = frozenset({
+    "run", "call", "Popen", "check_output", "check_call", "getoutput",
+})
+_RANDOM_FUNCS = frozenset({
+    "random", "randint", "randrange", "choice", "choices", "uniform",
+    "sample",
+})
+_SENSITIVE_NAME = re.compile(
+    r"(?i)(token|passwd|password|secret|api[_-]?key|otp|nonce)"
+)
+
+
+def _check_security(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python security rules SEC101–SEC105 (AST-based).
+
+    SEC101 (warning): a ``subprocess`` call given a string command
+    instead of a list — a string is handed to the shell as soon as
+    ``shell=True`` is added, and on POSIX a string with ``shell=False``
+    is treated as the program name. ``os.popen()`` always runs through
+    the shell, so any call to it is flagged. A variable holding the
+    command cannot be checked (its type is unknown), so only literal
+    strings and f-strings are flagged. SEC102 (warning): the ``random``
+    module used to build a token, password, secret or one-time code —
+    ``random`` is not cryptographically secure. Only a direct
+    ``random.*`` call assigned to a sensitively-named variable is
+    flagged. SEC103 (warning): an ``assert`` statement outside test
+    code — asserts are stripped entirely when Python runs with ``-O``.
+    SEC104 (warning): ``tempfile.mktemp()`` — the filename is
+    predictable, so another process can create it first. SEC105
+    (warning): ``os.chmod()`` with a world-writable mode (any constant
+    mode with the ``0o002`` bit set, e.g. ``0o777``).
+    """
+    findings: list[Finding] = []
+
+    # SEC103 — asserts in non-test code.
+    in_test_file = bool(_TEST_PATH.search(changed.path))
+    if not in_test_file:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assert):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "SEC103",
+                        "assert used outside test code — asserts are stripped with python -O.",
+                        "Raise a proper exception or validate explicitly instead of assert.",
+                    )
+                )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        else:
+            targets = None
+            value = None
+
+        # SEC102 — random.* assigned to a sensitively-named variable.
+        if (
+            targets is not None
+            and value is not None
+            and isinstance(value, ast.Call)
+        ):
+            called = _dotted_name(value.func)
+            if called.startswith("random.") and called.split(".")[-1] in _RANDOM_FUNCS:
+                for target in targets:
+                    if isinstance(target, ast.Name) and _SENSITIVE_NAME.search(target.id):
+                        findings.append(
+                            Finding(
+                                changed.path,
+                                _real(getattr(node, "lineno", 0)),
+                                "warning",
+                                "SEC102",
+                                f"'{target.id}' is built with random — random is not cryptographically secure.",
+                                "Use the secrets module (secrets.token_hex, secrets.choice) for tokens and passwords.",
+                            )
+                        )
+                        break
+
+        if not isinstance(node, ast.Call):
+            continue
+        called = _dotted_name(node.func)
+
+        # SEC101 — subprocess with a string command, or os.popen().
+        if called.startswith("subprocess.") and called.split(".")[-1] in _SUBPROCESS_FUNCS:
+            if node.args:
+                first = node.args[0]
+                is_string = (
+                    isinstance(first, ast.JoinedStr)
+                    or (
+                        isinstance(first, ast.Constant)
+                        and isinstance(first.value, str)
+                    )
+                )
+                if is_string:
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "SEC101",
+                            f"subprocess.{called.split('.')[-1]}() called with a string command instead of a list.",
+                            "Pass the command as a list (['ls', '-la']) and keep shell=False.",
+                        )
+                    )
+        elif called == "os.popen":
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "SEC101",
+                    "os.popen() runs the command through the shell.",
+                    "Use subprocess.run() with a list of arguments instead.",
+                )
+            )
+
+        # SEC104 — tempfile.mktemp().
+        if called == "tempfile.mktemp":
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "SEC104",
+                    "tempfile.mktemp() returns a predictable filename another process can create first.",
+                    "Use tempfile.NamedTemporaryFile() instead.",
+                )
+            )
+
+        # SEC105 — os.chmod() with a world-writable mode.
+        if called == "os.chmod" and len(node.args) >= 2:
+            mode = node.args[1]
+            if (
+                isinstance(mode, ast.Constant)
+                and isinstance(mode.value, int)
+                and mode.value & 0o002
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "SEC105",
+                        f"os.chmod() with mode {oct(mode.value)} makes the file world-writable.",
+                        "Use the least permissive mode the file needs (e.g. 0o600 for private data).",
+                    )
+                )
+
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -882,6 +1050,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_naming(tree, changed, _real))
     findings.extend(_check_style(tree, changed, _real))
     findings.extend(_check_errors(tree, changed, _real))
+    findings.extend(_check_security(tree, changed, _real))
     return findings
 
 
