@@ -819,6 +819,176 @@ class TestSecurityRules(unittest.TestCase):
         )
 
 
+class TestBugRules(unittest.TestCase):
+    def test_unreachable_after_return_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def check(user):
++    if not user:
++        return None
++    return user
++    log_audit(user)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "BUG101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 5)
+
+    def test_unreachable_after_raise_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def load_or_fail(path):
++    if not path:
++        raise ValueError("path required")
++        fallback_load(path)
++    return open(path)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "BUG101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_code_after_conditional_return_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def check(user):
++    if not user:
++        return None
++    return user
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "BUG101" for f in findings))
+
+    def test_duplicate_dict_key_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,1 @@
++settings = {"theme": "dark", "retries": 3, "theme": "light"}
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "BUG102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertIn("'theme'", flagged[0].message)
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_distinct_dict_keys_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,1 @@
++settings = {"theme": "dark", "retries": 3}
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "BUG102" for f in findings))
+
+    def test_identity_with_literal_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++if code is 200:
++    return "ok"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "BUG103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_identity_with_none_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++if user is None:
++    return None
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "BUG103" for f in findings))
+
+    def test_constant_if_condition_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++if True:
++    enable_feature()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "BUG104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_while_true_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++while True:
++    wait_for_event()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "BUG104" for f in findings))
+
+    def test_while_false_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++while False:
++    process_next()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "BUG104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_self_comparison_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def same(a, b):
++    if a == a:
++        return True
++    return False
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "BUG105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_clean_code_no_bug_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,7 @@
++def greet(name):
++    if name is None:
++        return "stranger"
++    if name == "admin":
++        return "boss"
++    settings = {"theme": "dark", "retries": 3}
++    return f"hello {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"BUG101", "BUG102", "BUG103", "BUG104", "BUG105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
