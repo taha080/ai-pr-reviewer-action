@@ -898,6 +898,171 @@ def _check_security(
     return findings
 
 
+def _check_bugs(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python bug rules BUG101–BUG105 (AST-based).
+
+    BUG101 (warning): code after ``return`` / ``raise`` / ``break`` /
+    ``continue`` in the same block — it never runs. Only statements in
+    the same body list are checked, so code after an ``if`` that returns
+    is left alone (the ``if`` may not run). BUG102 (warning): a dict
+    literal with the same constant key twice — the earlier value is
+    silently overwritten. Only constant keys are compared, and keys of
+    different types (``1`` vs ``True``) are not treated as duplicates.
+    BUG103 (warning): ``is`` / ``is not`` used with a literal number,
+    string or bytes value — identity is not value equality, so use
+    ``==``; ``is None`` / ``is True`` are left alone. BUG104 (warning):
+    a constant condition in ``if`` / ``while`` — the branch always
+    runs or never runs. ``while True`` (and other truthy constants in
+    ``while``) are exempt: they are the standard infinite-loop idiom;
+    only a falsy constant in ``while`` (``while False``) is flagged as
+    a dead loop. BUG105 (warning): comparing a variable to itself
+    (``x == x``) — almost certainly a typo, since it is always True
+    (``!=`` always False).
+    """
+    findings: list[Finding] = []
+
+    # BUG101 — unreachable code after a terminator in the same block.
+    _TERMINATORS = (ast.Return, ast.Raise, ast.Break, ast.Continue)
+
+    def _scan_bodies(node: ast.AST) -> None:
+        for attr in ("body", "orelse", "finalbody"):
+            stmts = getattr(node, attr, None)
+            if (
+                isinstance(stmts, list)
+                and stmts
+                and all(isinstance(stmt, ast.stmt) for stmt in stmts)
+            ):
+                terminated = False
+                for stmt in stmts:
+                    if terminated:
+                        findings.append(
+                            Finding(
+                                changed.path,
+                                _real(getattr(stmt, "lineno", 0)),
+                                "warning",
+                                "BUG101",
+                                "Code after 'return' / 'raise' / 'break' / 'continue' in this block never runs.",
+                                "Move it before the terminator, or into the branch that actually runs.",
+                            )
+                        )
+                    if isinstance(stmt, _TERMINATORS):
+                        terminated = True
+        for child in ast.iter_child_nodes(node):
+            _scan_bodies(child)
+
+    _scan_bodies(tree)
+
+    for node in ast.walk(tree):
+        # BUG102 — duplicate key in a dict literal.
+        if isinstance(node, ast.Dict):
+            seen: dict[tuple[str, str], int] = {}
+            for key in node.keys:
+                if key is None or not isinstance(key, ast.Constant):
+                    continue
+                marker = (type(key.value).__name__, repr(key.value))
+                if marker in seen:
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(key, "lineno", 0)),
+                            "warning",
+                            "BUG102",
+                            f"Duplicate key {key.value!r} in a dict literal — the earlier value is silently overwritten.",
+                            "Remove the duplicate, or rename the key you meant.",
+                        )
+                    )
+                else:
+                    seen[marker] = getattr(key, "lineno", 0)
+            continue
+
+        # BUG103 — `is` / `is not` with a literal. BUG105 — a variable
+        # compared to itself. Both read the same Compare node.
+        if isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+            for op, left, right in zip(node.ops, operands, operands[1:]):
+                if not isinstance(op, (ast.Is, ast.IsNot)):
+                    continue
+                literal: object = None
+                for side in (left, right):
+                    if (
+                        isinstance(side, ast.Constant)
+                        and isinstance(
+                            side.value, (int, float, complex, str, bytes)
+                        )
+                        and not isinstance(side.value, bool)
+                    ):
+                        literal = side.value
+                        break
+                if literal is not None:
+                    verb = "is" if isinstance(op, ast.Is) else "is not"
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "BUG103",
+                            f"Comparing with '{verb}' to the literal {literal!r} — identity is not value equality.",
+                            "Use '==' / '!=' to compare values; 'is' only checks that two names point at the same object.",
+                        )
+                    )
+                    break
+            for op, left, right in zip(node.ops, operands, operands[1:]):
+                if not isinstance(op, (ast.Eq, ast.NotEq)):
+                    continue
+                if (
+                    isinstance(left, ast.Name)
+                    and isinstance(right, ast.Name)
+                    and left.id == right.id
+                ):
+                    verb = "==" if isinstance(op, ast.Eq) else "!="
+                    outcome = "True" if isinstance(op, ast.Eq) else "False"
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "BUG105",
+                            f"Comparing '{left.id}' to itself with '{verb}' — always {outcome}.",
+                            "Check the variable names — one side is probably a typo.",
+                        )
+                    )
+                    break
+            continue
+
+        # BUG104 — constant condition in `if` / `while`.
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Constant):
+            outcome = "always runs" if node.test.value else "never runs"
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "BUG104",
+                    f"'if' condition is the constant {node.test.value!r}, so this branch {outcome}.",
+                    "Replace the constant with the real condition, or remove the dead branch.",
+                )
+            )
+        elif (
+            isinstance(node, ast.While)
+            and isinstance(node.test, ast.Constant)
+            and not node.test.value
+        ):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "BUG104",
+                    f"'while' condition is the constant {node.test.value!r}, so this loop never runs.",
+                    "Replace the constant with the real condition, or remove the dead loop.",
+                )
+            )
+
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -1051,6 +1216,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_style(tree, changed, _real))
     findings.extend(_check_errors(tree, changed, _real))
     findings.extend(_check_security(tree, changed, _real))
+    findings.extend(_check_bugs(tree, changed, _real))
     return findings
 
 
