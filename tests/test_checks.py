@@ -989,6 +989,235 @@ class TestBugRules(unittest.TestCase):
         )
 
 
+class TestPerformanceRules(unittest.TestCase):
+    def test_string_concat_in_for_loop_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def build_message(parts):
++    message = ""
++    for part in parts:
++        message += part
++    return message
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "PERF101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_string_concat_in_while_loop_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,7 @@
++def build_message(parts):
++    message = ""
++    index = 0
++    while index < len(parts):
++        message += parts[index]
++        index += 1
++    return message
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "PERF101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 5)
+
+    def test_int_augassign_in_loop_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def total(numbers):
++    count = 0
++    for n in numbers:
++        count += n
++    return count
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "PERF101" for f in findings))
+
+    def test_string_concat_outside_loop_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def build_message(parts):
++    message = ""
++    message += parts[0]
++    return message
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "PERF101" for f in findings))
+
+    def test_range_len_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def show_indexes(items):
++    total = 0
++    for i in range(len(items)):
++        total += items[i]
++    return total
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "PERF102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_plain_range_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def show_items(items):
++    for i in range(5):
++        use(items[i])
++    return items
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "PERF102" for f in findings))
+
+    def test_membership_in_list_literal_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def is_allowed(name):
++    return name in ["alice", "bob", "carol"]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "PERF103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_not_in_list_literal_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def is_blocked(name):
++    return name not in ["spam", "eggs"]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "PERF103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_membership_in_tuple_or_variable_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++ALLOWED = ("alice", "bob")
++
++def is_allowed(name):
++    if name in ALLOWED:
++        return True
++    return name in ("carol", "dave")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "PERF103" for f in findings))
+
+    def test_append_only_loop_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def squares(numbers):
++    result = []
++    for n in numbers:
++        result.append(n * n)
++    return result
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "PERF104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_append_to_parameter_list_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def collect(out, numbers):
++    for n in numbers:
++        out.append(n * n)
++    return out
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "PERF104" for f in findings))
+
+    def test_append_plus_other_work_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def squares_logged(numbers):
++    result = []
++    for n in numbers:
++        result.append(n * n)
++        log(n)
++    return result
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "PERF104" for f in findings))
+
+    def test_keys_iteration_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def show_keys(config):
++    count = 0
++    for key in config.keys():
++        count += 1
++    return count
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "PERF105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_direct_dict_iteration_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def show_keys(config):
++    count = 0
++    for key in config:
++        count += 1
++    return count
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "PERF105" for f in findings))
+
+    def test_clean_code_no_perf_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def greet(name):
++    if name not in {"alice", "bob"}:
++        return "stranger"
++    parts = [f"hello {name}"]
++    return "".join(parts)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"PERF101", "PERF102", "PERF103", "PERF104", "PERF105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
