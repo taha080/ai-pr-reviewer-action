@@ -1063,6 +1063,194 @@ def _check_bugs(
     return findings
 
 
+def _check_performance(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python performance rules PERF101–PERF105 (AST-based).
+
+    PERF101 (warning): ``name += ...`` on a string inside a loop — each
+    ``+=`` builds a whole new string, so the loop is quadratic; collect
+    the parts in a list and ``''.join(...)`` once at the end. Only names
+    assigned a string literal in the same function are flagged, so
+    ``total += 1`` on a number is left alone. PERF102 (warning):
+    ``range(len(x))`` — iterate the sequence directly, or use
+    ``enumerate(x)`` when the index is needed. PERF103 (warning):
+    ``x in [a, b, ...]`` — a membership test against a list literal
+    scans the whole list on every check; use a set or frozenset for
+    repeated lookups. Only list literals are flagged, not tuples or
+    variables. PERF104 (warning): a loop whose body is only
+    ``name.append(...)`` where ``name`` was assigned ``[]`` in the same
+    function — the loop is a list comprehension in disguise. A list
+    passed in from outside, or a loop doing more than appending, is
+    left alone. PERF105 (warning): ``for k in d.keys():`` — iterating
+    a dict already yields its keys, so ``.keys()`` is redundant.
+    """
+    findings: list[Finding] = []
+
+    # PERF102 / PERF103 / PERF105 — single-node checks.
+    for node in ast.walk(tree):
+        # PERF102 — range(len(x)).
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "range"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Call)
+            and isinstance(node.args[0].func, ast.Name)
+            and node.args[0].func.id == "len"
+            and len(node.args[0].args) == 1
+        ):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "PERF102",
+                    "range(len(x)) — iterate the sequence directly instead of indexing it.",
+                    "Use 'for item in x:' or 'for i, item in enumerate(x):' when the index is needed.",
+                )
+            )
+            continue
+
+        # PERF103 — membership test against a list literal.
+        if isinstance(node, ast.Compare):
+            for op, comparator in zip(node.ops, node.comparators):
+                if isinstance(op, (ast.In, ast.NotIn)) and isinstance(
+                    comparator, ast.List
+                ):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "PERF103",
+                            "Membership test against a list literal scans the whole list on every check.",
+                            "Use a set or frozenset for repeated lookups, e.g. {'alice', 'bob'}.",
+                        )
+                    )
+                    break
+            continue
+
+        # PERF105 — for k in d.keys():.
+        if isinstance(node, ast.For):
+            it = node.iter
+            if (
+                isinstance(it, ast.Call)
+                and isinstance(it.func, ast.Attribute)
+                and it.func.attr == "keys"
+                and not it.args
+                and not it.keywords
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "PERF105",
+                        "Iterating d.keys() — iterating the dict itself already yields its keys.",
+                        "Write 'for k in d:' instead.",
+                    )
+                )
+
+    # PERF101 / PERF104 — per-function, need scope info (which names
+    # hold a string, which hold a fresh empty list).
+    def _iter_func_nodes(func: ast.AST):
+        """Yield nodes in a function body, not descending into nested defs."""
+        stack = list(ast.iter_child_nodes(func))
+        while stack:
+            node = stack.pop()
+            yield node
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+            ):
+                continue
+            stack.extend(ast.iter_child_nodes(node))
+
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        string_names: set[str] = set()
+        list_names: set[str] = set()
+        for node in _iter_func_nodes(func):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                target = node.targets[0].id
+                if isinstance(node.value, ast.Constant) and isinstance(
+                    node.value.value, str
+                ):
+                    string_names.add(target)
+                elif isinstance(node.value, ast.List) and not node.value.elts:
+                    list_names.add(target)
+
+        def _visit(node: ast.AST, in_loop: bool) -> None:
+            if (
+                isinstance(
+                    node,
+                    (
+                        ast.FunctionDef,
+                        ast.AsyncFunctionDef,
+                        ast.ClassDef,
+                        ast.Lambda,
+                    ),
+                )
+                and node is not func
+            ):
+                return
+            now_in_loop = in_loop or isinstance(node, (ast.For, ast.While))
+            # PERF104 — loop body is a single append to a fresh list.
+            if isinstance(node, (ast.For, ast.While)) and len(node.body) == 1:
+                stmt = node.body[0]
+                if isinstance(stmt, ast.Expr) and isinstance(
+                    stmt.value, ast.Call
+                ):
+                    call = stmt.value
+                    if (
+                        isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "append"
+                        and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id in list_names
+                        and len(call.args) == 1
+                    ):
+                        findings.append(
+                            Finding(
+                                changed.path,
+                                _real(getattr(stmt, "lineno", 0)),
+                                "warning",
+                                "PERF104",
+                                f"Loop only appends to '{call.func.value.id}' — this is a list comprehension in disguise.",
+                                f"Write \"{call.func.value.id} = [<expr> for ... in ...]\" instead.",
+                            )
+                        )
+            # PERF101 — string += inside a loop.
+            if (
+                isinstance(node, ast.AugAssign)
+                and isinstance(node.op, ast.Add)
+                and isinstance(node.target, ast.Name)
+                and node.target.id in string_names
+                and now_in_loop
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "PERF101",
+                        f"String concatenation with '+=' on '{node.target.id}' inside a loop is quadratic.",
+                        "Collect the parts in a list and call ''.join(...) once at the end.",
+                    )
+                )
+            for child in ast.iter_child_nodes(node):
+                _visit(child, now_in_loop)
+
+        _visit(func, False)
+
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -1217,6 +1405,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_errors(tree, changed, _real))
     findings.extend(_check_security(tree, changed, _real))
     findings.extend(_check_bugs(tree, changed, _real))
+    findings.extend(_check_performance(tree, changed, _real))
     return findings
 
 
