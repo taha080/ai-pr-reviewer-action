@@ -1218,6 +1218,180 @@ class TestPerformanceRules(unittest.TestCase):
         )
 
 
+class TestDocRules(unittest.TestCase):
+    def test_public_function_without_docstring_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def fetch_user(user_id):
++    return {"id": user_id}
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DOC101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_private_function_without_docstring_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def _helper(value):
++    return value * 2
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DOC101" for f in findings))
+
+    def test_dunder_method_without_docstring_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++class Worker:
++    \"\"\"Does work.\"\"\"
++
++    def __init__(self):
++        self.x = 1
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DOC101" for f in findings))
+
+    def test_test_function_without_docstring_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def test_something():
++    assert True
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DOC101" for f in findings))
+
+    def test_public_class_without_docstring_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++class UserRecord:
++    def __init__(self, name):
++        self.name = name
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DOC102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_documented_function_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name):
++    \"\"\"Say hello.\"\"\"
++    return f"Hello {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DOC101" for f in findings))
+
+    def test_empty_docstring_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def empty_doc():
++    \"\"\"\"\"\"
++    return None
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DOC103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_whitespace_docstring_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def blank_doc():
++    \"\"\"   \"\"\"
++    return None
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DOC103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_docstring_without_full_stop_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name):
++    \"\"\"Say hello\"\"\"
++    return f"Hello {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DOC104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_docstring_with_full_stop_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name):
++    \"\"\"Say hello.\"\"\"
++    return f"Hello {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DOC104" for f in findings))
+
+    def test_todo_in_docstring_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def stale_note():
++    \"\"\"Fetch the record. TODO: handle the missing case.\"\"\"
++    return None
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DOC105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 2)
+
+    def test_clean_code_no_doc_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,11 @@
++\"\"\"Helpers.\"\"\"
++
++def greet(name):
++    \"\"\"Say hello.\"\"\"
++    return f"Hello {name}"
++
++
++class Greeter:
++    \"\"\"Greets people politely.\"\"\"
++
++    def __init__(self, name):
++        self.name = name
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"DOC101", "DOC102", "DOC103", "DOC104", "DOC105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
