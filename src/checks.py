@@ -1251,6 +1251,107 @@ def _check_performance(
     return findings
 
 
+def _check_docs(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python documentation rules DOC101–DOC105 (AST-based).
+
+    DOC101 (info): a public function or method without a docstring —
+    readers (and tools) cannot tell what it does without reading the
+    body. DOC102 (info): a public class without a docstring. DOC103
+    (warning): a docstring that is empty or only whitespace — it
+    claims to document the code and says nothing. DOC104 (info): a
+    docstring whose first line does not end with a full stop, ``!``
+    or ``?`` — the summary line should be a complete sentence.
+    DOC105 (warning): a docstring containing a TODO / FIXME / XXX
+    marker — the note belongs in the tracker, not in the docs users
+    read. Best-effort limits: private and dunder names are exempt
+    (implementation details), as are ``test_*`` functions and
+    ``Test*`` classes, which are self-documenting by convention; only
+    the first line is checked for DOC104, so multi-sentence summaries
+    are left alone.
+    """
+    findings: list[Finding] = []
+
+    def _docstring(node: ast.AST) -> tuple[str | None, int]:
+        """Return (docstring text, its line) or (None, 0)."""
+        body = getattr(node, "body", None)
+        if not body:
+            return None, 0
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            return first.value.value, getattr(first, "lineno", 0)
+        return None, 0
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith(("_", "test_")):
+                continue
+            missing_rule = "DOC101"
+            label = f"function '{node.name}'"
+        elif isinstance(node, ast.ClassDef):
+            if node.name.startswith(("_", "Test")):
+                continue
+            missing_rule = "DOC102"
+            label = f"class '{node.name}'"
+        else:
+            continue
+        text, doc_line = _docstring(node)
+        if text is None:
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "info",
+                    missing_rule,
+                    f"Public {label} has no docstring.",
+                    "Add a one-line summary of what it does and what it represents.",
+                )
+            )
+            continue
+        if not text.strip():
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(doc_line),
+                    "warning",
+                    "DOC103",
+                    f"Docstring of '{node.name}' is empty.",
+                    "Write a one-line summary, or remove the empty docstring.",
+                )
+            )
+            continue
+        first_line = text.strip().splitlines()[0].strip()
+        if not first_line.endswith((".", "!", "?")):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(doc_line),
+                    "info",
+                    "DOC104",
+                    f"Docstring of '{node.name}' does not end its first line with a full stop.",
+                    "End the summary line with a full stop.",
+                )
+            )
+        if re.search(r"\b(TODO|FIXME|XXX)\b", text, re.IGNORECASE):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(doc_line),
+                    "warning",
+                    "DOC105",
+                    f"Docstring of '{node.name}' contains a TODO/FIXME marker.",
+                    "Move the note to the issue tracker and keep the docstring for users.",
+                )
+            )
+
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -1406,6 +1507,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_security(tree, changed, _real))
     findings.extend(_check_bugs(tree, changed, _real))
     findings.extend(_check_performance(tree, changed, _real))
+    findings.extend(_check_docs(tree, changed, _real))
     return findings
 
 
