@@ -1392,6 +1392,227 @@ class TestDocRules(unittest.TestCase):
         )
 
 
+class TestTypingRules(unittest.TestCase):
+    def test_public_function_without_return_annotation_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def fetch_user(user_id: int):
++    return {"id": user_id}
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "TYP101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_annotated_function_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def fetch_user(user_id: int) -> dict:
++    \"\"\"Fetch a user by id.\"\"\"
++    return {"id": user_id}
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "TYP101" for f in findings))
+
+    def test_private_function_without_return_annotation_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def _helper(value: int) -> int:
++    return value * 2
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "TYP101" for f in findings))
+
+    def test_test_function_without_return_annotation_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,2 @@
++def test_something() -> None:
++    assert True
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "TYP101" for f in findings))
+
+    def test_unannotated_parameter_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name, greeting: str = "Hello") -> str:
++    \"\"\"Greet someone by name.\"\"\"
++    return f"{greeting} {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "TYP102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+        self.assertIn("name", flagged[0].message)
+
+    def test_self_and_annotated_params_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++class Worker:
++    \"\"\"Does work.\"\"\"
++
++    def run(self, job: str) -> None:
++        \"\"\"Run a job.\"\"\"
++        self.job = job
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "TYP102" for f in findings))
+
+    def test_any_return_annotation_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def load_config(path: str) -> Any:
++    \"\"\"Load the config file.\"\"\"
++    return {}
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "TYP103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_any_parameter_annotation_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def process(data: Any) -> None:
++    \"\"\"Process data.\"\"\"
++    return None
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "TYP103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_concrete_annotation_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def process(data: dict) -> str:
++    \"\"\"Process data.\"\"\"
++    return str(data)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "TYP103" for f in findings))
+
+    def test_typing_list_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++import typing
++
++
++def collect(items: typing.List[str]) -> list:
++    \"\"\"Collect items.\"\"\"
++    return list(items)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "TYP104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_bare_list_imported_from_typing_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++from typing import List
++
++
++def collect(items: List[str]) -> list:
++    \"\"\"Collect items.\"\"\"
++    return list(items)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "TYP104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_builtin_generic_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def collect(items: list[str]) -> list[str]:
++    \"\"\"Collect items.\"\"\"
++    return items
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "TYP104" for f in findings))
+
+    def test_none_function_returning_value_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def save_record(record: dict) -> None:
++    \"\"\"Save a record.\"\"\"
++    return record
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "TYP105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_none_function_with_bare_return_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def close() -> None:
++    \"\"\"Close the store.\"\"\"
++    return
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "TYP105" for f in findings))
+
+    def test_clean_code_no_typing_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,11 @@
++\"\"\"Helpers.\"\"\"
++
++def greet(name: str) -> str:
++    \"\"\"Say hello.\"\"\"
++    return f"Hello {name}"
++
++
++def collect(items: list[str]) -> dict[str, int]:
++    \"\"\"Count items.\"\"\"
++    counts: dict[str, int] = {}
++    for item in items:
++        counts[item] = counts.get(item, 0) + 1
++    return counts
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"TYP101", "TYP102", "TYP103", "TYP104", "TYP105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
