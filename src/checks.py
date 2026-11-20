@@ -1352,6 +1352,220 @@ def _check_docs(
     return findings
 
 
+_DEPRECATED_TYPING = {"List", "Dict", "Set", "Tuple", "FrozenSet", "Type"}
+
+
+def _check_typing(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python type-hint rules TYP101–TYP105 (AST-based).
+
+    TYP101 (info): a public function or method without a return type
+    annotation — callers cannot tell what it gives back without reading
+    the body. TYP102 (info): a public function or method with an
+    unannotated parameter — ``self`` and ``cls`` are exempt. TYP103
+    (warning): a bare ``Any`` used as an annotation — it switches the
+    type checker off for that value. TYP104 (info): a deprecated
+    ``typing`` generic (``List``, ``Dict``, ``Set``, ``Tuple``,
+    ``FrozenSet``, ``Type``) — the builtin generics (``list``,
+    ``dict``, ...) have done the same job since Python 3.9. TYP105
+    (warning): a function annotated ``-> None`` that returns a value —
+    the annotation and the code disagree. Best-effort limits: private,
+    dunder and ``test_*`` functions are exempt from TYP101/TYP102, as
+    are stub bodies (``pass`` / ``...`` only) and ``@overload`` /
+    ``@abstractmethod`` definitions; TYP104 only recognises the bare
+    ``List`` / ``Dict`` / ... spellings when the same fragment imports
+    them from ``typing`` (the ``typing.List`` spelling is always
+    recognised); TYP105 ignores ``return`` statements inside nested
+    functions.
+    """
+    findings: list[Finding] = []
+
+    # Bare typing generics imported in this fragment, e.g. List in
+    # "from typing import List" — only those names are treated as the
+    # deprecated aliases when they appear as annotations.
+    imported_typing: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "typing":
+            for alias in node.names:
+                if alias.name in _DEPRECATED_TYPING:
+                    imported_typing.add(alias.name)
+
+    def _is_stub(node) -> bool:
+        """True for pass/...-only bodies and overload/abstract defs."""
+
+        def _is_pass_or_ellipsis(stmt: ast.stmt) -> bool:
+            if isinstance(stmt, ast.Pass):
+                return True
+            return (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and stmt.value.value is Ellipsis
+            )
+
+        if node.body and all(_is_pass_or_ellipsis(s) for s in node.body):
+            return True
+        for dec in node.decorator_list:
+            name = ""
+            if isinstance(dec, ast.Name):
+                name = dec.id
+            elif isinstance(dec, ast.Attribute):
+                name = dec.attr
+            elif isinstance(dec, ast.Call):
+                func = dec.func
+                if isinstance(func, ast.Name):
+                    name = func.id
+                elif isinstance(func, ast.Attribute):
+                    name = func.attr
+            if name in ("overload", "abstractmethod"):
+                return True
+        return False
+
+    def _check_annotation(ann: ast.expr) -> None:
+        """Flag Any (TYP103) and deprecated typing generics (TYP104)."""
+        for sub in ast.walk(ann):
+            if isinstance(sub, ast.Name) and sub.id == "Any":
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(sub, "lineno", 0)),
+                        "warning",
+                        "TYP103",
+                        "Bare 'Any' annotation switches the type checker off.",
+                        "Use a real type, or a precise 'object' / union, instead.",
+                    )
+                )
+            elif (
+                isinstance(sub, ast.Attribute)
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id == "typing"
+                and sub.attr in _DEPRECATED_TYPING
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(sub, "lineno", 0)),
+                        "info",
+                        "TYP104",
+                        f"'typing.{sub.attr}' is deprecated — use the builtin '{sub.attr.lower()}' generic instead.",
+                        f"Write '{sub.attr.lower()}[...]' instead of 'typing.{sub.attr}[...]'.",
+                    )
+                )
+            elif isinstance(sub, ast.Name) and sub.id in imported_typing:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(sub, "lineno", 0)),
+                        "info",
+                        "TYP104",
+                        f"'{sub.id}' from typing is deprecated — use the builtin '{sub.id.lower()}' generic instead.",
+                        f"Write '{sub.id.lower()}[...]' instead of '{sub.id}[...]'.",
+                    )
+                )
+
+    def _value_return_lines(node) -> list[int]:
+        """Line numbers of 'return <value>' in this function only."""
+        lines: list[int] = []
+
+        def _visit(child: ast.AST) -> None:
+            if (
+                isinstance(
+                    child,
+                    (
+                        ast.FunctionDef,
+                        ast.AsyncFunctionDef,
+                        ast.ClassDef,
+                        ast.Lambda,
+                    ),
+                )
+                and child is not node
+            ):
+                return
+            if isinstance(child, ast.Return) and child.value is not None:
+                if not (
+                    isinstance(child.value, ast.Constant)
+                    and child.value.value is None
+                ):
+                    lines.append(getattr(child, "lineno", 0))
+            for grand in ast.iter_child_nodes(child):
+                _visit(grand)
+
+        _visit(node)
+        return lines
+
+    def _flag_unannotated(node, arg: ast.arg) -> None:
+        findings.append(
+            Finding(
+                changed.path,
+                _real(getattr(node, "lineno", 0)),
+                "info",
+                "TYP102",
+                f"Parameter '{arg.arg}' of '{node.name}' has no type annotation.",
+                f"Annotate '{arg.arg}' with its type.",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and node.annotation is not None:
+            _check_annotation(node.annotation)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        # Annotations on this function's own signature.
+        for arg in (
+            list(node.args.posonlyargs)
+            + list(node.args.args)
+            + list(node.args.kwonlyargs)
+        ):
+            if arg.annotation is not None:
+                _check_annotation(arg.annotation)
+        for extra in (node.args.vararg, node.args.kwarg):
+            if extra is not None and extra.annotation is not None:
+                _check_annotation(extra.annotation)
+        if node.returns is not None:
+            _check_annotation(node.returns)
+        # TYP105 — -> None but returns a value.
+        if isinstance(node.returns, ast.Constant) and node.returns.value is None:
+            for lineno in _value_return_lines(node):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(lineno),
+                        "warning",
+                        "TYP105",
+                        f"Function '{node.name}' is annotated '-> None' but returns a value.",
+                        "Return nothing, or change the annotation to the value's type.",
+                    )
+                )
+        # TYP101 / TYP102 — public, non-stub functions only.
+        if node.name.startswith(("_", "test_")) or _is_stub(node):
+            continue
+        if node.returns is None:
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "info",
+                    "TYP101",
+                    f"Public function '{node.name}' has no return type annotation.",
+                    "Add a return annotation so callers know what it gives back.",
+                )
+            )
+        params = list(node.args.posonlyargs) + list(node.args.args)
+        for index, arg in enumerate(params):
+            if index == 0 and arg.arg in ("self", "cls"):
+                continue
+            if arg.annotation is None:
+                _flag_unannotated(node, arg)
+        for arg in list(node.args.kwonlyargs):
+            if arg.annotation is None:
+                _flag_unannotated(node, arg)
+        for extra in (node.args.vararg, node.args.kwarg):
+            if extra is not None and extra.annotation is None:
+                _flag_unannotated(node, extra)
+
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -1508,6 +1722,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_bugs(tree, changed, _real))
     findings.extend(_check_performance(tree, changed, _real))
     findings.extend(_check_docs(tree, changed, _real))
+    findings.extend(_check_typing(tree, changed, _real))
     return findings
 
 
