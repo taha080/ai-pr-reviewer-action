@@ -1613,6 +1613,237 @@ class TestTypingRules(unittest.TestCase):
         )
 
 
+class TestAsyncRules(unittest.TestCase):
+    def test_time_sleep_in_async_def_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++import asyncio
++import time
++
++
++async def slow() -> None:
++    \"\"\"Slow.\"\"\"
++    await asyncio.sleep(0)
++    time.sleep(5)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ASC101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 8)
+
+    def test_bare_sleep_imported_from_time_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++import asyncio
++from time import sleep
++
++
++async def slow() -> None:
++    \"\"\"Slow.\"\"\"
++    await asyncio.sleep(0)
++    sleep(5)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ASC101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 8)
+
+    def test_time_sleep_in_sync_function_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++import time
++
++
++def slow() -> None:
++    \"\"\"Slow.\"\"\"
++    time.sleep(5)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "ASC101" for f in findings))
+
+    def test_async_call_without_await_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,12 @@
++import asyncio
++
++
++async def fetch_user(user_id: int) -> dict:
++    \"\"\"Fetch a user by id.\"\"\"
++    await asyncio.sleep(0)
++    return {"id": user_id}
++
++
++async def caller() -> None:
++    \"\"\"Call fetch_user.\"\"\"
++    fetch_user(1)
++    await fetch_user(2)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ASC102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 12)
+
+    def test_awaited_and_scheduled_calls_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,13 @@
++import asyncio
++
++
++async def fetch_user(user_id: int) -> dict:
++    \"\"\"Fetch a user by id.\"\"\"
++    await asyncio.sleep(0)
++    return {"id": user_id}
++
++
++async def caller() -> None:
++    \"\"\"Schedule fetch_user.\"\"\"
++    task = asyncio.create_task(fetch_user(1))
++    await fetch_user(2)
++    await task
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(rules & {"ASC102", "ASC105"})
+
+    def test_async_def_without_await_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++async def not_really_async() -> int:
++    \"\"\"Return a constant.\"\"\"
++    return 42
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ASC103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_awaited_generator_and_stub_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,15 @@
++import asyncio
++
++
++async def worker() -> None:
++    \"\"\"Work.\"\"\"
++    await asyncio.sleep(0)
++
++
++async def stream():
++    \"\"\"Yield values.\"\"\"
++    yield 1
++
++
++async def placeholder() -> None:
++    \"\"\"Do nothing yet.\"\"\"
++    ...
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "ASC103" for f in findings))
+
+    def test_run_until_complete_in_async_def_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,14 @@
++import asyncio
++
++
++async def fetch_user(user_id: int) -> dict:
++    \"\"\"Fetch a user by id.\"\"\"
++    await asyncio.sleep(0)
++    return {"id": user_id}
++
++
++async def nested_loop() -> None:
++    \"\"\"Run through a loop.\"\"\"
++    await asyncio.sleep(0)
++    loop = asyncio.get_event_loop()
++    loop.run_until_complete(fetch_user(1))
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ASC104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 14)
+        # The inner fetch_user call is scheduled, not forgotten.
+        self.assertFalse(any(f.rule == "ASC102" for f in findings))
+
+    def test_bare_create_task_flagged_but_assigned_not(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,20 @@
++import asyncio
++
++
++async def fetch_user(user_id: int) -> dict:
++    \"\"\"Fetch a user by id.\"\"\"
++    await asyncio.sleep(0)
++    return {"id": user_id}
++
++
++async def fire_and_forget() -> None:
++    \"\"\"Start a task.\"\"\"
++    await asyncio.sleep(0)
++    asyncio.create_task(fetch_user(1))
++
++
++async def careful() -> None:
++    \"\"\"Keep the task.\"\"\"
++    await asyncio.sleep(0)
++    task = asyncio.create_task(fetch_user(2))
++    await task
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "ASC105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 13)
+
+    def test_clean_async_code_no_async_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,13 @@
++import asyncio
++
++
++async def fetch_user(user_id: int) -> dict:
++    \"\"\"Fetch a user by id.\"\"\"
++    await asyncio.sleep(0)
++    return {"id": user_id}
++
++
++async def caller() -> None:
++    \"\"\"Call fetch_user properly.\"\"\"
++    user = await fetch_user(1)
++    task = asyncio.create_task(fetch_user(2))
++    await task
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"ASC101", "ASC102", "ASC103", "ASC104", "ASC105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
