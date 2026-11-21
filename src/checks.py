@@ -1566,6 +1566,227 @@ def _check_typing(
     return findings
 
 
+def _check_async(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python async/concurrency rules ASC101–ASC105 (AST-based).
+
+    ASC101 (warning): ``time.sleep(...)`` inside an ``async def`` — it blocks
+    the whole event loop; use ``await asyncio.sleep(...)`` instead. Both the
+    ``time.sleep`` spelling and a bare ``sleep`` imported from ``time`` are
+    recognised. ASC102 (warning): calling an async function without
+    ``await`` — the call builds a coroutine object that never runs. Only
+    async functions defined in the same fragment are recognised (plus
+    ``asyncio.sleep``). A call passed to ``asyncio.create_task`` /
+    ``ensure_future`` / ``gather`` / ``run_until_complete`` / ``wait`` is
+    exempt — those schedule the coroutine on purpose. ASC103 (info): an
+    ``async def`` that never awaits anything — it is probably a plain
+    function wearing ``async``. Stub bodies (``pass`` / ``...`` only) and
+    async generators (a ``yield`` in the body) are exempt. ASC104 (warning):
+    ``loop.run_until_complete(...)`` inside an ``async def`` — the loop is
+    already running, so this raises RuntimeError. ASC105 (warning): a bare
+    ``asyncio.create_task(...)`` statement whose result is discarded — the
+    task can be garbage-collected mid-flight and its exceptions are
+    silently lost; keep the task object. Best-effort limits: a call through
+    another name (e.g. an async function imported from elsewhere) is not
+    recognised by ASC102, and a blocking call inside a sync function nested
+    in an async one is not flagged by ASC101/ASC104.
+    """
+    findings: list[Finding] = []
+
+    async_names: set[str] = set()
+    time_sleep_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef):
+            async_names.add(node.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "time":
+            for alias in node.names:
+                if alias.name == "sleep":
+                    time_sleep_names.add(alias.asname or alias.name)
+
+    _SCHEDULERS = (
+        "create_task",
+        "ensure_future",
+        "gather",
+        "run_until_complete",
+        "wait",
+        "as_completed",
+    )
+
+    def _is_async_call(node: ast.Call) -> bool:
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in async_names:
+            return True
+        return (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "asyncio"
+            and func.attr == "sleep"
+        )
+
+    def _is_scheduler_call(node: ast.Call) -> bool:
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            return func.attr in _SCHEDULERS
+        return isinstance(func, ast.Name) and func.id in _SCHEDULERS
+
+    def _is_time_sleep(node: ast.Call) -> bool:
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id in time_sleep_names
+        return (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "time"
+            and func.attr == "sleep"
+        )
+
+    def _await_or_yield(node: ast.AST) -> tuple[bool, bool]:
+        """(has await, has yield) in this function, excluding nested defs."""
+        found = [False, False]
+
+        def _visit(child: ast.AST) -> None:
+            if (
+                isinstance(
+                    child,
+                    (
+                        ast.FunctionDef,
+                        ast.AsyncFunctionDef,
+                        ast.ClassDef,
+                        ast.Lambda,
+                    ),
+                )
+                and child is not node
+            ):
+                return
+            if isinstance(child, ast.Await):
+                found[0] = True
+            if isinstance(child, (ast.Yield, ast.YieldFrom)):
+                found[1] = True
+            for grand in ast.iter_child_nodes(child):
+                _visit(grand)
+
+        _visit(node)
+        return found[0], found[1]
+
+    def _is_stub_body(node) -> bool:
+        def _pass_or_ellipsis(stmt: ast.stmt) -> bool:
+            if isinstance(stmt, ast.Pass):
+                return True
+            return (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and stmt.value.value is Ellipsis
+            )
+
+        body = node.body
+        # A leading docstring does not make a stub real code.
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+        return bool(body) and all(_pass_or_ellipsis(s) for s in body)
+
+    # ASC103 — async defs that never await.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        if _is_stub_body(node):
+            continue
+        has_await, has_yield = _await_or_yield(node)
+        if not has_await and not has_yield:
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "info",
+                    "ASC103",
+                    f"Async function '{node.name}' never awaits anything.",
+                    "Make it a plain 'def', or await the async work it does.",
+                )
+            )
+
+    # ASC101 / ASC102 / ASC104 / ASC105 — walk with async context.
+    def _visit(node: ast.AST, in_async: bool, ancestors: tuple[ast.AST, ...]) -> None:
+        if isinstance(node, ast.AsyncFunctionDef):
+            in_async = True
+        elif isinstance(node, ast.FunctionDef):
+            in_async = False
+        if in_async:
+            if isinstance(node, ast.Call):
+                if _is_time_sleep(node):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "ASC101",
+                            "time.sleep() inside an async function blocks the whole event loop.",
+                            "Use 'await asyncio.sleep(...)' instead.",
+                        )
+                    )
+                elif _is_async_call(node) and not any(
+                    isinstance(a, ast.Await) for a in ancestors
+                ) and not any(
+                    isinstance(a, ast.Call) and _is_scheduler_call(a)
+                    for a in ancestors
+                ):
+                    func = node.func
+                    name = (
+                        func.id
+                        if isinstance(func, ast.Name)
+                        else f"asyncio.{func.attr}"
+                    )
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "ASC102",
+                            f"Async function '{name}' called without 'await' — the coroutine never runs.",
+                            f"Await it ('await {name}(...)'), or schedule it with asyncio.create_task.",
+                        )
+                    )
+                elif (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "run_until_complete"
+                ):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "ASC104",
+                            "run_until_complete() inside an async function — the event loop is already running.",
+                            "Await the coroutine directly instead of starting the loop again.",
+                        )
+                    )
+            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                call = node.value
+                if (
+                    isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "create_task"
+                ):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "ASC105",
+                            "asyncio.create_task() result is discarded — the task can be dropped mid-flight.",
+                            "Keep the task object ('task = asyncio.create_task(...)') and await it.",
+                        )
+                    )
+        for child in ast.iter_child_nodes(node):
+            _visit(child, in_async, ancestors + (node,))
+
+    _visit(tree, False, ())
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -1723,6 +1944,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_performance(tree, changed, _real))
     findings.extend(_check_docs(tree, changed, _real))
     findings.extend(_check_typing(tree, changed, _real))
+    findings.extend(_check_async(tree, changed, _real))
     return findings
 
 
