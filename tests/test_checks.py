@@ -1844,6 +1844,216 @@ class TestAsyncRules(unittest.TestCase):
         )
 
 
+class TestIdiomRules(unittest.TestCase):
+    def test_open_outside_with_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def read(path: str) -> str:
++    \"\"\"Read a file.\"\"\"
++    handle = open(path)
++    return handle.readline()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IDM101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_open_inside_with_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def read(path: str) -> str:
++    \"\"\"Read a file.\"\"\"
++    with open(path) as handle:
++        return handle.readline()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "IDM101" for f in findings))
+
+    def test_type_comparison_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++def is_text(value: object) -> bool:
++    \"\"\"Check the type.\"\"\"
++    return type(value) == str
++
++
++def is_number(value: object) -> bool:
++    \"\"\"Check the type.\"\"\"
++    return type(value) is int
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IDM102"]
+        self.assertEqual(len(flagged), 2)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual([f.line for f in flagged], [3, 8])
+
+    def test_isinstance_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def is_text(value: object) -> bool:
++    \"\"\"Check the type.\"\"\"
++    return isinstance(value, str)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "IDM102" for f in findings))
+
+    def test_len_compared_with_zero_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,18 @@
++def is_empty(items: list[str]) -> bool:
++    \"\"\"Check emptiness.\"\"\"
++    return len(items) == 0
++
++
++def has_items(items: list[str]) -> bool:
++    \"\"\"Check fullness.\"\"\"
++    return len(items) != 0
++
++
++def any_left(items: list[str]) -> bool:
++    \"\"\"Check anything left.\"\"\"
++    return len(items) > 0
++
++
++def empty_reversed(items: list[str]) -> bool:
++    \"\"\"Check emptiness, reversed.\"\"\"
++    return 0 == len(items)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IDM103"]
+        self.assertEqual(len(flagged), 4)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual([f.line for f in flagged], [3, 8, 13, 18])
+
+    def test_truthiness_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++def is_empty(items: list[str]) -> bool:
++    \"\"\"Check emptiness.\"\"\"
++    return not items
++
++
++def has_items(items: list[str]) -> bool:
++    \"\"\"Check fullness.\"\"\"
++    return bool(items)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "IDM103" for f in findings))
+
+    def test_percent_formatting_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name: str) -> str:
++    \"\"\"Greet someone.\"\"\"
++    return "Hello, %s!" % name
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IDM104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_fstring_and_format_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++def greet(name: str) -> str:
++    \"\"\"Greet someone.\"\"\"
++    return f"Hello, {name}!"
++
++
++def greet2(name: str) -> str:
++    \"\"\"Greet someone.\"\"\"
++    return "Hello, {}!".format(name)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "IDM104" for f in findings))
+
+    def test_in_keys_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++def has_key(mapping: dict[str, int], key: str) -> bool:
++    \"\"\"Check a key.\"\"\"
++    return key in mapping.keys()
++
++
++def lacks_key(mapping: dict[str, int], key: str) -> bool:
++    \"\"\"Check a key is missing.\"\"\"
++    return key not in mapping.keys()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "IDM105"]
+        self.assertEqual(len(flagged), 2)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual([f.line for f in flagged], [3, 8])
+
+    def test_in_dict_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def has_key(mapping: dict[str, int], key: str) -> bool:
++    \"\"\"Check a key.\"\"\"
++    return key in mapping
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "IDM105" for f in findings))
+
+    def test_clean_idiomatic_code_no_idiom_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,23 @@
++def read(path: str) -> str:
++    \"\"\"Read a file.\"\"\"
++    with open(path) as handle:
++        return handle.readline()
++
++
++def is_text(value: object) -> bool:
++    \"\"\"Check the type.\"\"\"
++    return isinstance(value, str)
++
++
++def is_empty(items: list[str]) -> bool:
++    \"\"\"Check emptiness.\"\"\"
++    return not items
++
++
++def has_key(mapping: dict[str, int], key: str) -> bool:
++    \"\"\"Check a key.\"\"\"
++    return key in mapping
++
++
++def greet(name: str) -> str:
++    \"\"\"Greet someone.\"\"\"
++    return f"Hello, {name}!"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"IDM101", "IDM102", "IDM103", "IDM104", "IDM105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
