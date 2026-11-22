@@ -1787,6 +1787,193 @@ def _check_async(
     return findings
 
 
+def _check_idioms(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python idiom rules IDM101–IDM105 (AST-based).
+
+    IDM101 (warning): ``open(...)`` called outside a ``with`` statement —
+    the file handle is never closed explicitly, so it leaks until the
+    garbage collector gets to it; use ``with open(...) as f:`` instead.
+    Only the direct ``with open(...) as f:`` form is recognised, so
+    ``f = open(...); with f:`` is still flagged (best-effort). IDM102
+    (warning): ``type(x) == T`` / ``is`` / ``!=`` / ``is not`` — this
+    compares the exact type and misses subclasses; use
+    ``isinstance(x, T)`` instead. IDM103 (info): ``len(x) == 0`` /
+    ``!= 0`` / ``> 0`` — compare truthiness instead (``not x`` / ``x``).
+    IDM104 (info): old-style ``%`` string formatting (``"%s" % value``)
+    — prefer an f-string or ``str.format(...)``. IDM105 (info):
+    ``x in d.keys()`` / ``x not in d.keys()`` — membership in a dict
+    already tests its keys, so ``.keys()`` is redundant. Best-effort
+    limits: only the bare ``open`` / ``type`` / ``len`` names are
+    recognised (an alias such as ``from builtins import open as o``
+    is not), and IDM101 does not track a handle opened earlier and
+    closed later by hand.
+    """
+    findings: list[Finding] = []
+
+    def _is_open_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "open"
+        )
+
+    def _is_len_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "len"
+            and len(node.args) == 1
+        )
+
+    def _is_zero(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Constant)
+            and type(node.value) is int
+            and node.value == 0
+        )
+
+    # IDM101 — open() calls that are a context expression of a with
+    # statement are fine; every other open() call is flagged.
+    with_opens: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.With):
+            for item in node.items:
+                for sub in ast.walk(item.context_expr):
+                    if _is_open_call(sub):
+                        with_opens.add(id(sub))
+    for node in ast.walk(tree):
+        if _is_open_call(node) and id(node) not in with_opens:
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "IDM101",
+                    "open() outside a 'with' statement — the file handle is never closed explicitly.",
+                    "Use 'with open(...) as f:' so the file closes even when an error is raised.",
+                )
+            )
+
+    # IDM102 / IDM103 / IDM105 — comparison rules; IDM104 — % formatting.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            for op, comparator in zip(node.ops, node.comparators):
+                # IDM102 — type(x) compared with == / != / is / is not.
+                if isinstance(op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot)):
+                    type_side = None
+                    if (
+                        isinstance(node.left, ast.Call)
+                        and isinstance(node.left.func, ast.Name)
+                        and node.left.func.id == "type"
+                        and len(node.left.args) == 1
+                    ):
+                        type_side = node.left
+                    elif (
+                        isinstance(comparator, ast.Call)
+                        and isinstance(comparator.func, ast.Name)
+                        and comparator.func.id == "type"
+                        and len(comparator.args) == 1
+                    ):
+                        type_side = comparator
+                    if type_side is not None:
+                        verb = (
+                            "=="
+                            if isinstance(op, ast.Eq)
+                            else "!=" if isinstance(op, ast.NotEq) else "is" if isinstance(op, ast.Is) else "is not"
+                        )
+                        findings.append(
+                            Finding(
+                                changed.path,
+                                _real(getattr(node, "lineno", 0)),
+                                "warning",
+                                "IDM102",
+                                f"type(x) compared with '{verb}' — exact-type checks miss subclasses.",
+                                "Use 'isinstance(x, T)' instead.",
+                            )
+                        )
+                        break
+                # IDM103 — len(x) compared with 0.
+                len_side = None
+                zero_side = False
+                if _is_len_call(node.left) and _is_zero(comparator):
+                    len_side, zero_side = node.left, True
+                elif _is_len_call(comparator) and _is_zero(node.left):
+                    len_side, zero_side = comparator, True
+                if len_side is not None and zero_side:
+                    if isinstance(op, ast.Eq):
+                        hint = "Use 'not x' instead."
+                    elif isinstance(op, ast.NotEq):
+                        hint = "Use 'x' instead."
+                    elif isinstance(op, ast.Gt) and len_side is node.left:
+                        hint = "Use 'x' instead."
+                    elif isinstance(op, ast.Lt) and len_side is comparator:
+                        hint = "Use 'x' instead."
+                    else:
+                        continue
+                    verb = (
+                        "=="
+                        if isinstance(op, ast.Eq)
+                        else "!="
+                        if isinstance(op, ast.NotEq)
+                        else ">"
+                        if isinstance(op, ast.Gt)
+                        else "<"
+                    )
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "info",
+                            "IDM103",
+                            f"len(x) compared with 0 using '{verb}' — compare truthiness instead.",
+                            hint,
+                        )
+                    )
+                    break
+                # IDM105 — x in d.keys() / x not in d.keys().
+                if isinstance(op, (ast.In, ast.NotIn)) and isinstance(
+                    comparator, ast.Call
+                ):
+                    func = comparator.func
+                    if (
+                        isinstance(func, ast.Attribute)
+                        and func.attr == "keys"
+                        and not comparator.args
+                        and not comparator.keywords
+                    ):
+                        verb = "in" if isinstance(op, ast.In) else "not in"
+                        findings.append(
+                            Finding(
+                                changed.path,
+                                _real(getattr(node, "lineno", 0)),
+                                "info",
+                                "IDM105",
+                                f"'{verb}' against d.keys() — membership in a dict already tests its keys.",
+                                "Write 'x in d:' instead.",
+                            )
+                        )
+                        break
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            # IDM104 — "%s" % value (old-style string formatting).
+            if isinstance(node.left, ast.Constant) and isinstance(
+                node.left.value, str
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "info",
+                        "IDM104",
+                        "Old-style '%' string formatting — prefer an f-string or str.format().",
+                        "Write f\"...{value}...\" or \"...\".format(value) instead.",
+                    )
+                )
+
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -1945,6 +2132,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_docs(tree, changed, _real))
     findings.extend(_check_typing(tree, changed, _real))
     findings.extend(_check_async(tree, changed, _real))
+    findings.extend(_check_idioms(tree, changed, _real))
     return findings
 
 
