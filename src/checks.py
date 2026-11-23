@@ -1974,6 +1974,147 @@ def _check_idioms(
     return findings
 
 
+def _check_logging(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python logging rules LOG101–LOG105 (AST-based).
+
+    LOG101 (warning): a logging call whose message is ``%``-formatted
+    eagerly — ``logging.info("... %s" % value)`` builds the string
+    even when the log level is disabled; pass the values as arguments
+    instead (``logging.info("... %s", value)``). LOG102 (warning): a
+    logging call whose message is an f-string — the same
+    eager-formatting problem; pass the template and the values as
+    arguments. LOG103 (warning): ``logging.exception(...)`` outside an
+    ``except`` handler — there is no active exception to log, so the
+    traceback is empty; use ``logging.error(...)`` instead, or move
+    the call into a handler. LOG104 (info): a logging call whose
+    message is built with ``str.format(...)`` — again eager
+    formatting; pass the template and the values as arguments.
+    LOG105 (info): ``logging.warn(...)`` is deprecated — use
+    ``logging.warning(...)`` instead. Best-effort limits: only calls
+    of the form ``<name>.<level>(...)`` are recognised, where
+    ``<name>`` is a bare name such as ``logging`` or ``logger`` (a
+    chained ``logging.getLogger(__name__).info(...)`` call is not);
+    LOG103 treats a function defined inside an ``except`` handler as
+    outside it, since the handler has finished by the time the
+    function runs.
+    """
+    findings: list[Finding] = []
+
+    _LEVELS = (
+        "debug",
+        "info",
+        "warning",
+        "warn",
+        "error",
+        "critical",
+        "exception",
+        "fatal",
+    )
+
+    def _is_logging_call(node: ast.AST) -> tuple[str, ast.expr | None] | None:
+        """Return (level, first_arg) for a <name>.<level>(...) call."""
+        if not isinstance(node, ast.Call):
+            return None
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr in _LEVELS
+            and isinstance(func.value, ast.Name)
+        ):
+            return None
+        first = node.args[0] if node.args else None
+        return (func.attr, first)
+
+    def _is_str_literal(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+    def _visit(node: ast.AST, in_except: bool) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            # A nested function runs after its enclosing handler has
+            # finished, so exception context does not carry into it.
+            in_except = False
+        if isinstance(node, ast.ExceptHandler):
+            for child in ast.iter_child_nodes(node):
+                _visit(child, True)
+            return
+        call = _is_logging_call(node)
+        if call is not None:
+            level, first = call
+            lineno = _real(getattr(node, "lineno", 0))
+            if level == "warn":
+                findings.append(
+                    Finding(
+                        changed.path,
+                        lineno,
+                        "info",
+                        "LOG105",
+                        "logging.warn() is deprecated — use logging.warning() instead.",
+                        "Rename the call to 'warning'; the behaviour is identical.",
+                    )
+                )
+            elif level == "exception" and not in_except:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        lineno,
+                        "warning",
+                        "LOG103",
+                        "logging.exception() outside an 'except' handler — there is no active exception to log.",
+                        "Use logging.error(...) here, or move the call inside an 'except' handler.",
+                    )
+                )
+            if first is not None:
+                if (
+                    isinstance(first, ast.BinOp)
+                    and isinstance(first.op, ast.Mod)
+                    and _is_str_literal(first.left)
+                ):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            lineno,
+                            "warning",
+                            "LOG101",
+                            "Logging call formats its message with '%' eagerly — the string is built even when the level is disabled.",
+                            "Pass the values as arguments: logging.info('... %s', value).",
+                        )
+                    )
+                elif isinstance(first, ast.JoinedStr):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            lineno,
+                            "warning",
+                            "LOG102",
+                            "Logging call passes an f-string — the message is formatted eagerly even when the level is disabled.",
+                            "Pass the template and the values as arguments: logging.info('... %s', value).",
+                        )
+                    )
+                elif (
+                    isinstance(first, ast.Call)
+                    and isinstance(first.func, ast.Attribute)
+                    and first.func.attr == "format"
+                    and _is_str_literal(first.func.value)
+                ):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            lineno,
+                            "info",
+                            "LOG104",
+                            "Logging call builds its message with str.format() eagerly — the string is built even when the level is disabled.",
+                            "Pass the values as arguments: logging.info('... {}', value).",
+                        )
+                    )
+        for child in ast.iter_child_nodes(node):
+            _visit(child, in_except)
+
+    _visit(tree, False)
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -2133,6 +2274,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_typing(tree, changed, _real))
     findings.extend(_check_async(tree, changed, _real))
     findings.extend(_check_idioms(tree, changed, _real))
+    findings.extend(_check_logging(tree, changed, _real))
     return findings
 
 
