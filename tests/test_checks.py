@@ -2054,6 +2054,177 @@ class TestIdiomRules(unittest.TestCase):
         )
 
 
+class TestLoggingRules(unittest.TestCase):
+    def test_percent_format_in_logging_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def report_user(name: str) -> None:
++    \"\"\"Report a login, formatting eagerly.\"\"\"
++    logging.info("User %s logged in" % name)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "LOG101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_logging_with_args_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def report_user(name: str) -> None:
++    \"\"\"Report a login the lazy way.\"\"\"
++    logging.info("User %s logged in", name)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "LOG101" for f in findings))
+
+    def test_fstring_in_logging_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def report_count(count: int) -> None:
++    \"\"\"Report a count, formatting eagerly.\"\"\"
++    logger.info(f"Processed {count} items")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "LOG102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_plain_string_in_logging_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def report_done() -> None:
++    \"\"\"Report completion.\"\"\"
++    logging.info("All done")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(
+            any(f.rule in ("LOG101", "LOG102", "LOG104") for f in findings)
+        )
+
+    def test_exception_outside_handler_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,1 @@
++logging.exception("Something failed")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "LOG103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_exception_inside_handler_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def handle_error() -> None:
++    \"\"\"Log an error inside a handler.\"\"\"
++    try:
++        risky()
++    except ValueError:
++        logging.exception("Something failed")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "LOG103" for f in findings))
+
+    def test_exception_in_nested_def_inside_handler_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,9 @@
++def handle_error() -> None:
++    \"\"\"Define a logger inside a handler.\"\"\"
++    try:
++        risky()
++    except ValueError:
++        def log_later() -> None:
++            \"\"\"Log later, outside the handler.\"\"\"
++            logging.exception("Something failed")
++        log_later()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "LOG103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].line, 8)
+
+    def test_format_call_in_logging_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def report_status(status: str) -> None:
++    \"\"\"Report a status, formatting eagerly.\"\"\"
++    logging.info("Status: {}".format(status))
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "LOG104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_warn_deprecated_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def warn_user() -> None:
++    \"\"\"Warn the user, the deprecated way.\"\"\"
++    logging.warn("Heads up")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "LOG105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_warning_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def warn_user() -> None:
++    \"\"\"Warn the user, the current way.\"\"\"
++    logging.warning("Heads up")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "LOG105" for f in findings))
+
+    def test_clean_logging_code_no_logging_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,11 @@
++def report_user(name: str) -> None:
++    \"\"\"Report a login the lazy way.\"\"\"
++    logger.info("User %s logged in", name)
++
++
++def handle_error() -> None:
++    \"\"\"Log an error inside a handler.\"\"\"
++    try:
++        risky()
++    except ValueError:
++        logger.exception("Something failed")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"LOG101", "LOG102", "LOG103", "LOG104", "LOG105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
