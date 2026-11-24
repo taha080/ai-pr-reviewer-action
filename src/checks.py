@@ -2115,6 +2115,209 @@ def _check_logging(
     return findings
 
 
+def _check_classes(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python class-design rules CLS101–CLS105 (AST-based).
+
+    CLS101 (info): a class that defines attributes but no methods —
+    a data-only container; a ``@dataclass`` or ``NamedTuple`` says
+    the same thing with less boilerplate. CLS102 (info): an
+    ``__init__`` whose whole body is a single ``super().__init__(...)``
+    call passing the same arguments through — the method adds
+    nothing and can be deleted. CLS103 (info): an instance method
+    that never uses ``self`` — it does not need an instance, so it
+    should be a ``@staticmethod`` (or a plain function). CLS104
+    (warning): a class that defines ``__eq__`` without ``__hash__``
+    (or the other way round) — defining ``__eq__`` sets
+    ``__hash__`` to ``None``, so instances become unhashable.
+    CLS105 (info): a class whose body is only a docstring and/or
+    ``pass`` — an empty placeholder left behind. Best-effort
+    limits: CLS103 counts a zero-argument ``super()`` call as using
+    ``self``, since it only works inside a method; stub methods
+    (only a docstring and/or ``pass``), dunder methods and methods
+    decorated with ``@staticmethod``, ``@classmethod``,
+    ``@property`` or ``@abstractmethod`` are exempt from CLS103;
+    CLS102 only fires when every argument passed to ``super()`` is
+    one of the ``__init__`` parameters (or there are no extra
+    parameters and no arguments), and it skips ``*args`` /
+    ``**kwargs`` forwarding.
+    """
+    findings: list[Finding] = []
+
+    def _is_docstring_or_pass(stmt: ast.stmt) -> bool:
+        if isinstance(stmt, ast.Pass):
+            return True
+        return (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and isinstance(stmt.value.value, str)
+        )
+
+    def _decorator_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+        names: set[str] = set()
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Name):
+                names.add(dec.id)
+            elif isinstance(dec, ast.Attribute):
+                names.add(dec.attr)
+        return names
+
+    def _uses_self(method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        for node in ast.walk(method):
+            if isinstance(node, ast.Name) and node.id == "self":
+                return True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "super"
+                and not node.args
+                and not node.keywords
+            ):
+                # Zero-argument super() only works inside a method,
+                # so it counts as using self.
+                return True
+        return False
+
+    def _is_redundant_init(
+        method: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> bool:
+        if method.name != "__init__":
+            return False
+        body = method.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            # A leading docstring is not a real statement.
+            body = body[1:]
+        if len(body) != 1:
+            return False
+        stmt = body[0]
+        if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+            return False
+        call = stmt.value
+        func = call.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == "__init__"
+            and isinstance(func.value, ast.Call)
+            and isinstance(func.value.func, ast.Name)
+            and func.value.func.id == "super"
+        ):
+            return False
+        if method.args.vararg is not None or method.args.kwarg is not None:
+            return False
+        if any(kw.arg is None for kw in call.keywords):
+            return False
+        params = [a.arg for a in method.args.args[1:]]
+        params += [a.arg for a in method.args.kwonlyargs]
+        passed: list[str] = []
+        for arg in call.args:
+            if isinstance(arg, ast.Starred) or not isinstance(arg, ast.Name):
+                return False
+            passed.append(arg.id)
+        for kw in call.keywords:
+            if not isinstance(kw.value, ast.Name):
+                return False
+            passed.append(kw.value.id)
+        return sorted(passed) == sorted(params)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        methods = [
+            stmt
+            for stmt in node.body
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        attrs = [
+            stmt
+            for stmt in node.body
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign))
+        ]
+        class_line = _real(getattr(node, "lineno", 0))
+        if not methods and attrs:
+            findings.append(
+                Finding(
+                    changed.path,
+                    class_line,
+                    "info",
+                    "CLS101",
+                    f"Class '{node.name}' defines attributes but no methods — it is only a data container.",
+                    "Use a @dataclass or a NamedTuple instead; they give you __init__ and __eq__ for free.",
+                )
+            )
+        elif not methods and all(_is_docstring_or_pass(s) for s in node.body):
+            findings.append(
+                Finding(
+                    changed.path,
+                    class_line,
+                    "info",
+                    "CLS105",
+                    f"Class '{node.name}' is empty — its body is only a docstring and/or 'pass'.",
+                    "Delete it if it is a leftover placeholder, or fill in the behaviour it is meant to hold.",
+                )
+            )
+        method_names = {method.name for method in methods}
+        if ("__eq__" in method_names) != ("__hash__" in method_names):
+            if "__eq__" in method_names:
+                message = (
+                    f"Class '{node.name}' defines __eq__ but not __hash__ — "
+                    "defining __eq__ sets __hash__ to None, so instances become unhashable."
+                )
+            else:
+                message = (
+                    f"Class '{node.name}' defines __hash__ but not __eq__ — "
+                    "hashing and equality will disagree."
+                )
+            findings.append(
+                Finding(
+                    changed.path,
+                    class_line,
+                    "warning",
+                    "CLS104",
+                    message,
+                    "Define __eq__ and __hash__ together, or neither.",
+                )
+            )
+        for method in methods:
+            start = _real(getattr(method, "lineno", 0))
+            if _is_redundant_init(method):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        start,
+                        "info",
+                        "CLS102",
+                        f"__init__ in '{node.name}' only calls super().__init__() with the same arguments — it adds nothing.",
+                        "Delete the method; the parent's __init__ runs anyway.",
+                    )
+                )
+            if (
+                method.args.args
+                and method.args.args[0].arg == "self"
+                and not method.name.startswith("__")
+                and not _decorator_names(method)
+                & {"staticmethod", "classmethod", "property", "abstractmethod"}
+                and not all(_is_docstring_or_pass(s) for s in method.body)
+                and not _uses_self(method)
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        start,
+                        "info",
+                        "CLS103",
+                        f"Method '{method.name}' never uses 'self' — it does not need an instance.",
+                        "Make it a @staticmethod, or move it out of the class as a plain function.",
+                    )
+                )
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -2275,6 +2478,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_async(tree, changed, _real))
     findings.extend(_check_idioms(tree, changed, _real))
     findings.extend(_check_logging(tree, changed, _real))
+    findings.extend(_check_classes(tree, changed, _real))
     return findings
 
 
