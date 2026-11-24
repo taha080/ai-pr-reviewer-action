@@ -2225,6 +2225,245 @@ class TestLoggingRules(unittest.TestCase):
         )
 
 
+class TestClassRules(unittest.TestCase):
+    def test_data_only_class_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++class Config:
++    \"\"\"Settings, held as plain attributes.\"\"\"
++
++    host: str = "localhost"
++    port: int = 8080
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CLS101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_class_with_method_not_flagged_cls101(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,7 @@
++class Config:
++    \"\"\"Settings with a method.\"\"\"
++
++    host: str = "localhost"
++
++    def describe(self) -> str:
++        \"\"\"Describe the settings.\"\"\"
++        return self.host
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CLS101" for f in findings))
+
+    def test_redundant_init_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++class Child(Base):
++    \"\"\"Child that adds nothing.\"\"\"
++
++    def __init__(self, name: str) -> None:
++        \"\"\"Pass everything through.\"\"\"
++        super().__init__(name)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CLS102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_init_doing_real_work_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++class Child(Base):
++    \"\"\"Child that adds its own state.\"\"\"
++
++    def __init__(self, name: str) -> None:
++        \"\"\"Store the name, then pass it on.\"\"\"
++        self.name = name
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CLS102" for f in findings))
+
+    def test_init_passing_subset_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++class Child(Base):
++    \"\"\"Child that keeps one argument back.\"\"\"
++
++    def __init__(self, name: str, extra: str) -> None:
++        \"\"\"Pass only the name through.\"\"\"
++        super().__init__(name)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CLS102" for f in findings))
+
+    def test_method_not_using_self_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++class Helper:
++    \"\"\"Helper whose method ignores the instance.\"\"\"
++
++    def greet(self) -> str:
++        \"\"\"Return a greeting.\"\"\"
++        return "hello"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CLS103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 4)
+
+    def test_method_using_self_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++class Helper:
++    \"\"\"Helper whose method uses the instance.\"\"\"
++
++    def greet(self) -> str:
++        \"\"\"Return a greeting for this helper.\"\"\"
++        return f"hello {self.name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CLS103" for f in findings))
+
+    def test_method_with_zero_arg_super_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++class Child(Base):
++    \"\"\"Child that overrides describe.\"\"\"
++
++    def describe(self) -> str:
++        \"\"\"Describe via the parent.\"\"\"
++        return super().describe()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CLS103" for f in findings))
+
+    def test_staticmethod_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++class Helper:
++    \"\"\"Helper with a static method.\"\"\"
++
++    @staticmethod
++    def greet() -> str:
++        \"\"\"Return a greeting.\"\"\"
++        return "hello"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CLS103" for f in findings))
+
+    def test_eq_without_hash_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,9 @@
++class Point:
++    \"\"\"A point with equality but no hash.\"\"\"
++
++    def __init__(self, x: int) -> None:
++        \"\"\"Store the coordinate.\"\"\"
++        self.x = x
++
++    def __eq__(self, other: object) -> bool:
++        \"\"\"Compare coordinates.\"\"\"
++        return isinstance(other, Point) and self.x == other.x
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CLS104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_eq_and_hash_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,13 @@
++class Point:
++    \"\"\"A point with equality and hash.\"\"\"
++
++    def __init__(self, x: int) -> None:
++        \"\"\"Store the coordinate.\"\"\"
++        self.x = x
++
++    def __eq__(self, other: object) -> bool:
++        \"\"\"Compare coordinates.\"\"\"
++        return isinstance(other, Point) and self.x == other.x
++
++    def __hash__(self) -> int:
++        \"\"\"Hash the coordinate.\"\"\"
++        return hash(self.x)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "CLS104" for f in findings))
+
+    def test_empty_class_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++class Placeholder:
++    \"\"\"A class left empty.\"\"\"
++
++    pass
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "CLS105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_clean_class_no_class_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,17 @@
++class Widget:
++    \"\"\"A well-behaved class.\"\"\"
++
++    def __init__(self, label: str) -> None:
++        \"\"\"Store the label.\"\"\"
++        self.label = label
++
++    def describe(self) -> str:
++        \"\"\"Describe the widget.\"\"\"
++        return f"Widget: {self.label}"
++
++    def __eq__(self, other: object) -> bool:
++        \"\"\"Compare labels.\"\"\"
++        return isinstance(other, Widget) and self.label == other.label
++
++    def __hash__(self) -> int:
++        \"\"\"Hash the label.\"\"\"
++        return hash(self.label)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"CLS101", "CLS102", "CLS103", "CLS104", "CLS105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
