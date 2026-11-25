@@ -2464,6 +2464,235 @@ class TestClassRules(unittest.TestCase):
         )
 
 
+class TestFunctionRules(unittest.TestCase):
+    def test_inconsistent_return_fall_off_end_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def find_user(users: list[str], name: str) -> str | None:
++    \"\"\"Find a user by name, or return nothing.\"\"\"
++    for user in users:
++        if user == name:
++            return user
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "FN101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_inconsistent_return_bare_return_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def check(value: int) -> str | None:
++    \"\"\"Return a label, or nothing at all.\"\"\"
++    if value > 0:
++        return "positive"
++    return
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "FN101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_if_else_both_returning_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def pick(flag: bool) -> int:
++    \"\"\"Pick a number.\"\"\"
++    if flag:
++        return 1
++    else:
++        return 2
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN101" for f in findings))
+
+    def test_single_return_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def add(a: int, b: int) -> int:
++    \"\"\"Add two numbers.\"\"\"
++    return a + b
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN101" for f in findings))
+
+    def test_unused_parameter_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name: str, title: str) -> str:
++    \"\"\"Greet a user by name.\"\"\"
++    return f"Hello, {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "FN102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_all_parameters_used_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name: str, title: str) -> str:
++    \"\"\"Greet a user by name and title.\"\"\"
++    return f"Hello, {title} {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN102" for f in findings))
+
+    def test_self_parameter_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(self) -> str:
++    \"\"\"Return a greeting.\"\"\"
++    return "hello"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN102" for f in findings))
+
+    def test_parameter_used_in_nested_function_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def outer(label: str) -> str:
++    \"\"\"Return the label via a nested helper.\"\"\"
++    def inner() -> str:
++        \"\"\"Return the outer label.\"\"\"
++        return label
++    return inner()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN102" for f in findings))
+        self.assertFalse(any(f.rule == "FN104" for f in findings))
+
+    def test_return_value_in_generator_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def stream_items(items: list[int]) -> Iterator[int]:
++    \"\"\"Yield each item, then report how many there were.\"\"\"
++    for item in items:
++        yield item
++    return len(items)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "FN103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 5)
+
+    def test_generator_bare_return_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++def stream_items(items: list[int]) -> Iterator[int]:
++    \"\"\"Yield each item, then stop.\"\"\"
++    for item in items:
++        yield item
++    return
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN103" for f in findings))
+
+    def test_dead_nested_function_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,7 @@
++def process_order(total: float, discount: float) -> float:
++    \"\"\"Apply a discount to an order total.\"\"\"
++    def apply_tax(amount: float) -> float:
++        \"\"\"Add tax to an amount.\"\"\"
++        return amount * 1.2
++
++    return total - discount
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "FN104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_called_nested_function_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,7 @@
++def process_order(total: float, discount: float) -> float:
++    \"\"\"Apply a discount and tax to an order total.\"\"\"
++    def apply_tax(amount: float) -> float:
++        \"\"\"Add tax to an amount.\"\"\"
++        return amount * 1.2
++
++    return apply_tax(total - discount)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN104" for f in findings))
+
+    def test_call_default_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def create_user(name: str, created_at: datetime = datetime.now()) -> str:
++    \"\"\"Create a user stamped with the creation time.\"\"\"
++    return f"{name} joined at {created_at}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "FN105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 1)
+
+    def test_literal_default_not_flagged_fn105(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name: str, title: str = "Ms") -> str:
++    \"\"\"Greet a user by name and title.\"\"\"
++    return f"Hello, {title} {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "FN105" for f in findings))
+
+    def test_clean_function_no_function_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++def total(items: list[int], tax: float) -> float:
++    \"\"\"Total a list of prices with tax.\"\"\"
++    subtotal = sum(items)
++    if tax <= 0:
++        return float(subtotal)
++    return float(subtotal) * (1 + tax)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"FN101", "FN102", "FN103", "FN104", "FN105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
