@@ -2318,6 +2318,245 @@ def _check_classes(
     return findings
 
 
+def _check_functions(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python function-design rules FN101–FN105 (AST-based).
+
+    FN101 (warning): a function that returns a value on some paths
+    but falls off the end or returns bare on others — callers get
+    ``None`` on the paths that do not return a value. FN102 (info):
+    a parameter that is never read in the function body. FN103
+    (warning): a ``return`` with a value inside a generator function
+    — the value is silently discarded (it only becomes
+    ``StopIteration.value``). FN104 (info): a function defined inside
+    another function and never referenced there. FN105 (warning): a
+    default argument that is a function call — it is evaluated once,
+    when the ``def`` statement runs, so every call shares the same
+    object. Best-effort limits: FN101 treats a trailing ``if`` /
+    ``else`` whose branches both return as returning, but a trailing
+    loop or ``try`` is treated as falling off the end; FN102 counts a
+    parameter as used if its name is loaded anywhere in the function,
+    including inside a nested function (a closure) or in a nested
+    function's default value or decorator, and a nested function
+    parameter with the same name can mask a genuinely unused outer
+    parameter; FN102 skips ``self`` / ``cls``, ``*args`` /
+    ``**kwargs``, and stub, ``@overload`` or ``@abstractmethod``
+    functions; FN105 flags every call default, including harmless
+    ones such as a constant computed once.
+    """
+    findings: list[Finding] = []
+
+    def _is_stub(
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> bool:
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            # A leading docstring is not a real statement.
+            body = body[1:]
+        if not body:
+            return True
+        if all(
+            isinstance(stmt, ast.Pass)
+            or (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and stmt.value.value is Ellipsis
+            )
+            for stmt in body
+        ):
+            return True
+        return len(body) == 1 and isinstance(body[0], ast.Raise)
+
+    def _decorator_names(
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> set[str]:
+        names: set[str] = set()
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Name):
+                names.add(dec.id)
+            elif isinstance(dec, ast.Attribute):
+                names.add(dec.attr)
+        return names
+
+    def _nodes_without_nested(root: ast.AST) -> list[ast.AST]:
+        """All nodes under ``root`` except inside nested functions.
+
+        A nested function's own body is skipped (its returns and
+        yields belong to it, not to the enclosing function), but a
+        lambda body is kept: it has no ``return`` statements and a
+        parameter loaded inside it is still a use of the outer one.
+        """
+        collected: list[ast.AST] = []
+        stack: list[ast.AST] = [root]
+        while stack:
+            node = stack.pop()
+            if (
+                node is not root
+                and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ):
+                continue
+            collected.append(node)
+            stack.extend(ast.iter_child_nodes(node))
+        return collected
+
+    def _block_always_returns(stmts: list[ast.stmt]) -> bool:
+        if not stmts:
+            return False
+        last = stmts[-1]
+        if isinstance(last, (ast.Return, ast.Raise)):
+            return True
+        if isinstance(last, ast.If) and last.orelse:
+            return _block_always_returns(last.body) and _block_always_returns(
+                last.orelse
+            )
+        return False
+
+    def _nested_defs(
+        func: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+        """Function definitions inside ``func``, at any depth.
+
+        Nested definitions are collected but never descended into,
+        so a function defined inside a nested function belongs to
+        that nested function, not to ``func``.
+        """
+        found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+
+        def visit(node: ast.AST) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    found.append(child)
+                elif isinstance(child, ast.stmt):
+                    visit(child)
+
+        visit(func)
+        return found
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        start = _real(getattr(node, "lineno", 0))
+        own_nodes = _nodes_without_nested(node)
+        returns = [n for n in own_nodes if isinstance(n, ast.Return)]
+        value_returns = [r for r in returns if r.value is not None]
+        bare_returns = [r for r in returns if r.value is None]
+        if (
+            not _is_stub(node)
+            and value_returns
+            and (bare_returns or not _block_always_returns(node.body))
+        ):
+            findings.append(
+                Finding(
+                    changed.path,
+                    start,
+                    "warning",
+                    "FN101",
+                    f"Function '{node.name}' returns a value on some paths but falls off the end or returns bare on others — callers get None on those paths.",
+                    "Return an explicit value on every path, or return None deliberately and annotate the function accordingly.",
+                )
+            )
+        yields = [
+            n
+            for n in own_nodes
+            if isinstance(n, (ast.Yield, ast.YieldFrom))
+        ]
+        if yields:
+            for ret in value_returns:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(ret, "lineno", 0)),
+                        "warning",
+                        "FN103",
+                        f"Return with a value inside generator '{node.name}' — the value is silently discarded.",
+                        "Yield the value instead, or collect the results and return them from a regular function.",
+                    )
+                )
+        if _is_stub(node) or _decorator_names(node) & {
+            "overload",
+            "abstractmethod",
+        }:
+            continue
+        used: set[str] = set()
+        for n in ast.walk(node):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+                used.add(n.id)
+            elif isinstance(n, ast.AugAssign) and isinstance(
+                n.target, ast.Name
+            ):
+                # `x += 1` reads x, even though the target is Store.
+                used.add(n.target.id)
+        params = (
+            list(node.args.posonlyargs)
+            + list(node.args.args)
+            + list(node.args.kwonlyargs)
+        )
+        if params and params[0].arg in ("self", "cls"):
+            params = params[1:]
+        for param in params:
+            if param.arg not in used:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        start,
+                        "info",
+                        "FN102",
+                        f"Parameter '{param.arg}' in '{node.name}' is never used.",
+                        "Remove it, or use it — an unused parameter misleads callers about what the function needs.",
+                    )
+                )
+        for nested in _nested_defs(node):
+            if nested.name not in used:
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(nested, "lineno", 0)),
+                        "info",
+                        "FN104",
+                        f"Nested function '{nested.name}' is defined but never used inside '{node.name}'.",
+                        "Delete it, or call it where it was meant to run.",
+                    )
+                )
+        positional = list(node.args.posonlyargs) + list(node.args.args)
+        defaults = node.args.defaults
+        for arg, default in zip(
+            positional[len(positional) - len(defaults):] if defaults else [],
+            defaults,
+        ):
+            if isinstance(default, ast.Call):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        start,
+                        "warning",
+                        "FN105",
+                        f"Default argument '{arg.arg}' in '{node.name}' is a function call — it is evaluated once, when the function is defined.",
+                        "Use None as the default and call the function inside the body, so every call gets a fresh value.",
+                    )
+                )
+        for arg, default in zip(
+            node.args.kwonlyargs, node.args.kw_defaults
+        ):
+            if default is not None and isinstance(default, ast.Call):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        start,
+                        "warning",
+                        "FN105",
+                        f"Default argument '{arg.arg}' in '{node.name}' is a function call — it is evaluated once, when the function is defined.",
+                        "Use None as the default and call the function inside the body, so every call gets a fresh value.",
+                    )
+                )
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -2479,6 +2718,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_idioms(tree, changed, _real))
     findings.extend(_check_logging(tree, changed, _real))
     findings.extend(_check_classes(tree, changed, _real))
+    findings.extend(_check_functions(tree, changed, _real))
     return findings
 
 
