@@ -2693,6 +2693,191 @@ class TestFunctionRules(unittest.TestCase):
         )
 
 
+class TestStringRules(unittest.TestCase):
+    def test_fstring_without_placeholder_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def status_label() -> str:
++    \"\"\"Return the current status label.\"\"\"
++    return f"ready"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STR101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_fstring_with_placeholder_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name: str) -> str:
++    \"\"\"Greet a user by name.\"\"\"
++    return f"Hello, {name}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "STR101" for f in findings))
+
+    def test_empty_fstring_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def blank() -> str:
++    \"\"\"Return an empty string.\"\"\"
++    return f""
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STR101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_discarded_strip_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def clean_name(name: str) -> str:
++    \"\"\"Clean a display name.\"\"\"
++    name.strip()
++    return name
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STR102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_discarded_replace_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def fix_text(text: str) -> str:
++    \"\"\"Fix a piece of text.\"\"\"
++    text.replace("old", "new")
++    return text
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STR102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_assigned_strip_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def clean_name(name: str) -> str:
++    \"\"\"Clean a display name.\"\"\"
++    return name.strip()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "STR102" for f in findings))
+
+    def test_str_of_literal_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greeting_text() -> str:
++    \"\"\"Return a greeting.\"\"\"
++    return str("hello")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STR103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_str_of_variable_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def as_text(value: int) -> str:
++    \"\"\"Return a value as text.\"\"\"
++    return str(value)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "STR103" for f in findings))
+
+    def test_literal_concatenation_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def welcome_message() -> str:
++    \"\"\"Return a welcome message.\"\"\"
++    return "Welcome, " + "friend"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STR104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_literal_plus_variable_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def greet(name: str) -> str:
++    \"\"\"Greet a user by name.\"\"\"
++    return "Hello, " + name
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "STR104" for f in findings))
+
+    def test_join_on_string_literal_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def joined_letters() -> str:
++    \"\"\"Join letters with commas.\"\"\"
++    return ",".join("abc")
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "STR105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_join_on_list_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def joined_parts(parts: list[str]) -> str:
++    \"\"\"Join parts with commas.\"\"\"
++    return ",".join(parts)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "STR105" for f in findings))
+
+    def test_clean_string_code_no_string_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def greet(name: str) -> str:
++    \"\"\"Greet a user by name.\"\"\"
++    cleaned = name.strip()
++    return f"Hello, {cleaned}"
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"STR101", "STR102", "STR103", "STR104", "STR105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
