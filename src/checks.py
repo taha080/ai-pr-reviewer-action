@@ -2557,6 +2557,133 @@ def _check_functions(
     return findings
 
 
+def _check_strings(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python string rules STR101–STR105 (AST-based).
+
+    STR101 (info): an f-string with no interpolated values —
+    ``f"ready"`` is just a plain string with a needless ``f`` prefix;
+    drop the prefix. STR102 (warning): a pure string method called
+    as a bare statement, such as ``name.strip()`` — strings are
+    immutable, so the new string is built and immediately thrown
+    away; assign or return the result. STR103 (info): ``str()``
+    called on a string literal — the value is already a string;
+    use the literal directly. STR104 (info): two string literals
+    joined with ``+`` — merge them into one literal (adjacent
+    literals are concatenated by Python anyway). STR105 (warning):
+    ``.join()`` called on a single string literal, such as
+    ``",".join("abc")`` — join iterates the string character by
+    character, producing ``"a,b,c"``, which is almost certainly not
+    what was meant; pass a list of strings instead. Best-effort
+    limits: STR102 recognises the method name only, since the
+    receiver's type cannot be known from a diff fragment, so a
+    same-named method on another object that mutates in place would
+    be flagged wrongly; STR105 only flags a literal argument, not a
+    variable that happens to hold a string.
+    """
+    findings: list[Finding] = []
+
+    _PURE_STRING_METHODS = frozenset({
+        "capitalize", "casefold", "center", "expandtabs", "format",
+        "format_map", "join", "ljust", "lower", "lstrip",
+        "removeprefix", "removesuffix", "replace", "rjust", "rstrip",
+        "strip", "swapcase", "title", "upper", "zfill",
+    })
+
+    def _is_str_literal(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+    for node in ast.walk(tree):
+        # STR101 — f-string with no placeholders.
+        if isinstance(node, ast.JoinedStr):
+            if not any(
+                isinstance(part, ast.FormattedValue) for part in node.values
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "info",
+                        "STR101",
+                        "f-string with no placeholders — the 'f' prefix does nothing.",
+                        "Drop the 'f' prefix and use a plain string.",
+                    )
+                )
+        # STR102 — pure string method result discarded.
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            func = node.value.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in _PURE_STRING_METHODS
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "warning",
+                        "STR102",
+                        f"Result of '.{func.attr}()' is discarded — strings are immutable, so the original is unchanged.",
+                        "Assign or return the result, e.g. 'name = name.strip()'.",
+                    )
+                )
+        # STR103 — str() on a string literal.
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "str"
+            and len(node.args) == 1
+            and not node.keywords
+            and _is_str_literal(node.args[0])
+        ):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "info",
+                    "STR103",
+                    "str() called on a string literal — the value is already a string.",
+                    "Use the string literal directly.",
+                )
+            )
+        # STR104 — two string literals joined with +.
+        elif (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, ast.Add)
+            and _is_str_literal(node.left)
+            and _is_str_literal(node.right)
+        ):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "info",
+                    "STR104",
+                    "Two string literals joined with '+' — merge them into one literal.",
+                    "Write a single string literal, or place the literals side by side.",
+                )
+            )
+        # STR105 — .join() on a single string literal.
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "join"
+            and len(node.args) == 1
+            and _is_str_literal(node.args[0])
+        ):
+            findings.append(
+                Finding(
+                    changed.path,
+                    _real(getattr(node, "lineno", 0)),
+                    "warning",
+                    "STR105",
+                    "'.join()' called on a single string — it will join the string character by character.",
+                    "Pass a list of strings instead, e.g. ','.join(['a', 'b', 'c']).",
+                )
+            )
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -2719,6 +2846,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_logging(tree, changed, _real))
     findings.extend(_check_classes(tree, changed, _real))
     findings.extend(_check_functions(tree, changed, _real))
+    findings.extend(_check_strings(tree, changed, _real))
     return findings
 
 
