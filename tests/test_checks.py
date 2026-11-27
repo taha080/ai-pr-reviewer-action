@@ -2878,6 +2878,206 @@ class TestStringRules(unittest.TestCase):
         )
 
 
+class TestReturnRules(unittest.TestCase):
+    def test_sort_result_assigned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def sorted_items(items: list[int]) -> list[int]:
++    \"\"\"Return the items in sorted order.\"\"\"
++    result = items.sort()
++    return result
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_reverse_result_returned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def reversed_items(items: list[int]) -> list[int]:
++    \"\"\"Return the items in reverse order.\"\"\"
++    return items.reverse()
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_sort_bare_statement_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def tidy(items: list[int]) -> list[int]:
++    \"\"\"Sort the items and return them.\"\"\"
++    items.sort()
++    return items
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "RET101" for f in findings))
+
+    def test_append_result_assigned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def with_extra(items: list[int], extra: int) -> list[int]:
++    \"\"\"Return the items with one extra value added.\"\"\"
++    result = items.append(extra)
++    return result
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_extend_result_returned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def combined(items: list[int], more: list[int]) -> list[int]:
++    \"\"\"Return the items combined with more values.\"\"\"
++    return items.extend(more)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_append_bare_statement_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def with_extra(items: list[int], extra: int) -> list[int]:
++    \"\"\"Return the items with one extra value added.\"\"\"
++    items.append(extra)
++    return items
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "RET102" for f in findings))
+
+    def test_update_result_assigned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def merged(settings: dict[str, int], extra: dict[str, int]) -> dict[str, int]:
++    \"\"\"Return the settings merged with the extras.\"\"\"
++    result = settings.update(extra)
++    return result
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_update_bare_statement_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def merged(settings: dict[str, int], extra: dict[str, int]) -> dict[str, int]:
++    \"\"\"Return the settings merged with the extras.\"\"\"
++    settings.update(extra)
++    return settings
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "RET103" for f in findings))
+
+    def test_shuffle_result_assigned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++import random
++
++
++def shuffled(items: list[int]) -> list[int]:
++    \"\"\"Return the items in a random order.\"\"\"
++    result = random.shuffle(items)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 6)
+
+    def test_shuffle_bare_statement_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,6 @@
++import random
++
++
++def shuffled(items: list[int]) -> list[int]:
++    \"\"\"Return the items in a random order.\"\"\"
++    random.shuffle(items)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "RET104" for f in findings))
+
+    def test_add_result_assigned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def with_tag(tags: set[str], tag: str) -> set[str]:
++    \"\"\"Return the tags with one more tag added.\"\"\"
++    result = tags.add(tag)
++    return result
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_discard_result_returned_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def without_tag(tags: set[str], tag: str) -> set[str]:
++    \"\"\"Return the tags without one tag.\"\"\"
++    return tags.discard(tag)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "RET105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_clean_return_code_no_return_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def sorted_with_extra(items: list[int], extra: int) -> list[int]:
++    \"\"\"Return the sorted items with one extra value added.\"\"\"
++    items.append(extra)
++    items.sort()
++    return items
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"RET101", "RET102", "RET103", "RET104", "RET105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
