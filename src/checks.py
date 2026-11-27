@@ -2684,6 +2684,125 @@ def _check_strings(
     return findings
 
 
+def _check_returns(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python return-value rules RET101–RET105 (AST-based).
+
+    RET101 (warning): the result of ``.sort()`` or ``.reverse()``
+    used as a value — both sort/reverse the list in place and
+    return ``None``, so ``x = items.sort()`` sets ``x`` to ``None``;
+    call it on its own line and use the list itself (or ``sorted()``
+    for a new list). RET102 (warning): the result of an in-place
+    list mutator (``.append()``, ``.extend()``, ``.insert()``,
+    ``.remove()``, ``.clear()``) used as a value — they modify the
+    list and return ``None``. RET103 (warning): the result of
+    ``.update()`` used as a value — it merges in place and returns
+    ``None``. RET104 (warning): the result of ``.shuffle()`` used
+    as a value — it shuffles in place and returns ``None``.
+    RET105 (warning): the result of a set mutator (``.add()``,
+    ``.discard()``) used as a value — they modify the set in place
+    and return ``None``. "Used as a value" means the call appears
+    anywhere except as a bare statement: assigned, returned, nested
+    in another expression, and so on. Best-effort limits: the rules
+    recognise the method name only, since the receiver's type
+    cannot be known from a diff fragment, so a same-named method on
+    another object that does return a value would be flagged
+    wrongly; RET104 only recognises the attribute form
+    (``random.shuffle(...)``), not a bare ``shuffle(...)`` imported
+    with ``from random import shuffle``.
+    """
+    findings: list[Finding] = []
+
+    _NONE_RETURNING = {
+        "sort": (
+            "RET101",
+            "sorts in place and returns None",
+            "Call '.sort()' on its own line, then use the list itself — or use sorted() for a new list.",
+        ),
+        "reverse": (
+            "RET101",
+            "reverses in place and returns None",
+            "Call '.reverse()' on its own line, then use the list itself — or use reversed() for an iterator.",
+        ),
+        "append": (
+            "RET102",
+            "modifies the list in place and returns None",
+            "Call it on its own line, then use the list itself.",
+        ),
+        "extend": (
+            "RET102",
+            "modifies the list in place and returns None",
+            "Call it on its own line, then use the list itself.",
+        ),
+        "insert": (
+            "RET102",
+            "modifies the list in place and returns None",
+            "Call it on its own line, then use the list itself.",
+        ),
+        "remove": (
+            "RET102",
+            "modifies the collection in place and returns None",
+            "Call it on its own line, then use the collection itself.",
+        ),
+        "clear": (
+            "RET102",
+            "modifies the collection in place and returns None",
+            "Call it on its own line, then use the collection itself.",
+        ),
+        "update": (
+            "RET103",
+            "merges in place and returns None",
+            "Call '.update()' on its own line, then use the updated object itself.",
+        ),
+        "shuffle": (
+            "RET104",
+            "shuffles in place and returns None",
+            "Call '.shuffle()' on its own line, then use the list itself.",
+        ),
+        "add": (
+            "RET105",
+            "modifies the set in place and returns None",
+            "Call it on its own line, then use the set itself.",
+        ),
+        "discard": (
+            "RET105",
+            "modifies the set in place and returns None",
+            "Call it on its own line, then use the set itself.",
+        ),
+    }
+
+    # Calls that stand alone as a bare statement use their result
+    # correctly (the in-place change is the point), so they are exempt.
+    bare_calls = {
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+    }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        entry = _NONE_RETURNING.get(func.attr)
+        if entry is None or id(node) in bare_calls:
+            continue
+        rule, effect, suggestion = entry
+        findings.append(
+            Finding(
+                changed.path,
+                _real(getattr(node, "lineno", 0)),
+                "warning",
+                rule,
+                f"Result of '.{func.attr}()' is used as a value — it {effect}.",
+                suggestion,
+            )
+        )
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -2847,6 +2966,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_classes(tree, changed, _real))
     findings.extend(_check_functions(tree, changed, _real))
     findings.extend(_check_strings(tree, changed, _real))
+    findings.extend(_check_returns(tree, changed, _real))
     return findings
 
 
