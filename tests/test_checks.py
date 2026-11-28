@@ -3078,6 +3078,231 @@ class TestReturnRules(unittest.TestCase):
         )
 
 
+class TestDictRules(unittest.TestCase):
+    def test_conditional_lookup_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def setting(settings: dict[str, int], key: str) -> int:
++    \"\"\"Return the setting for the key, or zero.\"\"\"
++    return settings[key] if key in settings else 0
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_conditional_lookup_mirrored_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def setting(settings: dict[str, int], key: str) -> int:
++    \"\"\"Return the setting for the key, or zero.\"\"\"
++    return 0 if key not in settings else settings[key]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT101"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_conditional_other_value_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,3 @@
++def setting(settings: dict[str, int], key: str) -> int:
++    \"\"\"Return one when the key exists, or zero.\"\"\"
++    return 1 if key in settings else 0
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DCT101" for f in findings))
+
+    def test_if_else_lookup_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,7 @@
++def setting(settings: dict[str, int], key: str) -> int:
++    \"\"\"Return the setting for the key, or zero.\"\"\"
++    if key in settings:
++        value = settings[key]
++    else:
++        value = 0
++    return value
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_if_else_lookup_mirrored_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,7 @@
++def setting(settings: dict[str, int], key: str) -> int:
++    \"\"\"Return the setting for the key, or zero.\"\"\"
++    if key not in settings:
++        value = 0
++    else:
++        value = settings[key]
++    return value
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT102"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_if_else_different_targets_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++def setting(settings: dict[str, int], key: str) -> int:
++    \"\"\"Return the setting for the key, or zero.\"\"\"
++    value = 0
++    if key in settings:
++        value = settings[key]
++    else:
++        other = 0
++    return value
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DCT102" for f in findings))
+
+    def test_insert_default_by_hand_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def ensure(counts: dict[str, int], key: str) -> int:
++    \"\"\"Return the count for the key, starting at zero.\"\"\"
++    if key not in counts:
++        counts[key] = 0
++    return counts[key]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT103"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_assign_other_key_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def ensure(counts: dict[str, int], key: str) -> int:
++    \"\"\"Return the count for the key, starting at zero.\"\"\"
++    if key not in counts:
++        counts["total"] = 0
++    return counts[key]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DCT103" for f in findings))
+
+    def test_empty_dict_call_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def empty() -> dict[str, int]:
++    \"\"\"Return an empty settings dict.\"\"\"
++    settings = dict()
++    return settings
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT104"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "info")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_dict_call_with_arguments_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,5 @@
++def copied(settings: dict[str, int]) -> dict[str, int]:
++    \"\"\"Return a copy of the settings.\"\"\"
++    first = dict(settings)
++    second = dict(timeout=30)
++    return first
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DCT104" for f in findings))
+
+    def test_self_update_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def bump(counts: dict[str, int], key: str) -> int:
++    \"\"\"Add one to the count for the key and return it.\"\"\"
++    counts[key] = counts[key] + 1
++    return counts[key]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_self_update_multiply_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def double(counts: dict[str, int], key: str) -> int:
++    \"\"\"Double the count for the key and return it.\"\"\"
++    counts[key] = counts[key] * 2
++    return counts[key]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        flagged = [f for f in findings if f.rule == "DCT105"]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, "warning")
+        self.assertEqual(flagged[0].line, 3)
+
+    def test_augmented_update_not_flagged(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,4 @@
++def bump(counts: dict[str, int], key: str) -> int:
++    \"\"\"Add one to the count for the key and return it.\"\"\"
++    counts[key] += 1
++    return counts[key]
+"""
+        findings = review_files(parse_unified_diff(diff))
+        self.assertFalse(any(f.rule == "DCT105" for f in findings))
+
+    def test_clean_dict_code_no_dict_findings(self):
+        diff = """diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,0 +1,8 @@
++def setting(settings: dict[str, int], key: str) -> int:
++    \"\"\"Return the setting for the key, or zero.\"\"\"
++    return settings.get(key, 0)
++
++
++def ensure(counts: dict[str, int], key: str) -> int:
++    \"\"\"Return the count for the key, starting at zero.\"\"\"
++    return counts.setdefault(key, 0)
+"""
+        findings = review_files(parse_unified_diff(diff))
+        rules = {f.rule for f in findings}
+        self.assertFalse(
+            rules & {"DCT101", "DCT102", "DCT103", "DCT104", "DCT105"}
+        )
+
+
 class TestIgnoreRules(unittest.TestCase):
     IGNORE_DIFF = """diff --git a/x.py b/x.py
 --- a/x.py
