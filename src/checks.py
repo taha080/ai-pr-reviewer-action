@@ -2803,6 +2803,184 @@ def _check_returns(
     return findings
 
 
+def _check_dicts(
+    tree: ast.AST, changed: ChangedFile, _real
+) -> list[Finding]:
+    """Python dictionary rules DCT101–DCT105 (AST-based).
+
+    DCT101 (warning): ``d[key] if key in d else default`` — the
+    conditional expression looks the key up twice; ``d.get(key,
+    default)`` does it in one call (the mirrored ``default if key
+    not in d else d[key]`` form is flagged too). DCT102 (warning):
+    the same lookup written as an ``if`` / ``else`` that assigns
+    ``d[key]`` on one branch and a default on the other — again,
+    ``d.get(key, default)`` says it in one line. DCT103 (warning):
+    ``if key not in d: d[key] = default`` — ``d.setdefault(key,
+    default)`` inserts the default only when the key is missing and
+    returns the value either way. DCT104 (info): ``dict()`` with no
+    arguments — the empty-dict literal ``{}`` is shorter and
+    clearer. DCT105 (warning): ``d[key] = d[key] + 1`` — the
+    augmented form ``d[key] += 1`` states the update directly (for
+    counting, ``collections.Counter`` may fit even better).
+    Best-effort limits: the dict and key are matched by name /
+    expression shape only, since their types cannot be known from a
+    diff fragment, so a same-shaped pattern on another mapping type
+    would be flagged too; DCT102 only recognises a single assignment
+    on each branch, and DCT105 only when the right-hand side is a
+    binary operation on the very same subscript.
+    """
+    findings: list[Finding] = []
+
+    def _same_expr(left: ast.expr, right: ast.expr) -> bool:
+        # Compare by source shape: ast.dump would also compare the
+        # Load/Store context, so `d[key]` as a target would never
+        # match `d[key]` as a value.
+        return ast.unparse(left) == ast.unparse(right)
+
+    def _subscript_of(expr: ast.expr, container: ast.expr, key: ast.expr) -> bool:
+        return (
+            isinstance(expr, ast.Subscript)
+            and _same_expr(expr.value, container)
+            and _same_expr(expr.slice, key)
+        )
+
+    def _membership(test: ast.expr) -> tuple[ast.expr, ast.expr, bool] | None:
+        """Return (key, container, negated) for `key in d` / `key not in d`."""
+        if not isinstance(test, ast.Compare):
+            return None
+        if len(test.ops) != 1 or len(test.comparators) != 1:
+            return None
+        op = test.ops[0]
+        if isinstance(op, ast.In):
+            return test.left, test.comparators[0], False
+        if isinstance(op, ast.NotIn):
+            return test.left, test.comparators[0], True
+        return None
+
+    def _single_assign(body: list[ast.stmt]) -> ast.Assign | None:
+        if len(body) != 1 or not isinstance(body[0], ast.Assign):
+            return None
+        if len(body[0].targets) != 1:
+            return None
+        return body[0]
+
+    for node in ast.walk(tree):
+        # DCT101 — d[key] if key in d else default (and the mirror form).
+        if isinstance(node, ast.IfExp):
+            membership = _membership(node.test)
+            if membership is not None:
+                key, container, negated = membership
+                lookup = node.orelse if negated else node.body
+                if _subscript_of(lookup, container, key):
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "DCT101",
+                            "Conditional expression looks the key up twice — 'd[key] if key in d else default'.",
+                            "Use d.get(key, default) — one lookup, same result.",
+                        )
+                    )
+
+        # DCT102 / DCT103 — if/else forms of the same patterns.
+        if isinstance(node, ast.If):
+            membership = _membership(node.test)
+            if membership is not None:
+                key, container, negated = membership
+                body_assign = _single_assign(node.body)
+                else_assign = _single_assign(node.orelse)
+                if body_assign is not None and else_assign is not None:
+                    lookup_assign = else_assign if negated else body_assign
+                    default_assign = body_assign if negated else else_assign
+                    same_target = _same_expr(
+                        lookup_assign.targets[0], default_assign.targets[0]
+                    )
+                    if same_target and _subscript_of(
+                        lookup_assign.value, container, key
+                    ):
+                        findings.append(
+                            Finding(
+                                changed.path,
+                                _real(getattr(node, "lineno", 0)),
+                                "warning",
+                                "DCT102",
+                                "If/else assigns d[key] on one branch and a default on the other.",
+                                "Use d.get(key, default) — one lookup, same result.",
+                            )
+                        )
+                if negated and body_assign is not None and not node.orelse:
+                    target = body_assign.targets[0]
+                    if _subscript_of(target, container, key):
+                        findings.append(
+                            Finding(
+                                changed.path,
+                                _real(getattr(node, "lineno", 0)),
+                                "warning",
+                                "DCT103",
+                                "'if key not in d: d[key] = default' — inserting a default by hand.",
+                                "Use d.setdefault(key, default) — it inserts only when missing and returns the value.",
+                            )
+                        )
+
+        # DCT104 — dict() with no arguments.
+        if isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "dict"
+                and not node.args
+                and not node.keywords
+            ):
+                findings.append(
+                    Finding(
+                        changed.path,
+                        _real(getattr(node, "lineno", 0)),
+                        "info",
+                        "DCT104",
+                        "dict() with no arguments — an empty dict in longhand.",
+                        "Use the literal {} instead.",
+                    )
+                )
+
+        # DCT105 — d[key] = d[key] <op> ...
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            value = node.value
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(value, ast.BinOp)
+                and _same_expr(value.left, target)
+            ):
+                op_name = type(value.op).__name__
+                symbol = {
+                    "Add": "+=",
+                    "Sub": "-=",
+                    "Mult": "*=",
+                    "Div": "/=",
+                    "FloorDiv": "//=",
+                    "Mod": "%=",
+                    "Pow": "**=",
+                    "BitOr": "|=",
+                    "BitAnd": "&=",
+                    "BitXor": "^=",
+                    "LShift": "<<=",
+                    "RShift": ">>=",
+                }.get(op_name)
+                if symbol is not None:
+                    findings.append(
+                        Finding(
+                            changed.path,
+                            _real(getattr(node, "lineno", 0)),
+                            "warning",
+                            "DCT105",
+                            "Assigning d[key] from an expression on d[key] itself.",
+                            f"Use the augmented form 'd[key] {symbol} ...' — for counting, collections.Counter may fit even better.",
+                        )
+                    )
+
+    return findings
+
+
 def _check_style(
     tree: ast.AST, changed: ChangedFile, _real
 ) -> list[Finding]:
@@ -2967,6 +3145,7 @@ def _check_python_ast(changed: ChangedFile) -> list[Finding]:
     findings.extend(_check_functions(tree, changed, _real))
     findings.extend(_check_strings(tree, changed, _real))
     findings.extend(_check_returns(tree, changed, _real))
+    findings.extend(_check_dicts(tree, changed, _real))
     return findings
 
 
